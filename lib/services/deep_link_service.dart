@@ -26,7 +26,10 @@ const String kDeepLinkScheme = 'sunndari';
 const String kDeepLinkHost = 'app';
 
 /// Hosted redirect page (docs/index.html on GitHub Pages, repo aira, folder /docs).
-const String kProfileOpenPageUrl = 'https://priynka2004.github.io/aira/';
+//const String kProfileOpenPageUrl = 'https://priynka2004.github.io/aira/';
+
+const String kProfileOpenPageUrl = 'https://priynka2004.github.io/sunndari/';
+
 
 const String _kLastHandledLink = 'deep_link_last_handled';
 

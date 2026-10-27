@@ -95,7 +95,17 @@ class ServicesPricingStep extends StatefulWidget {
   /// no "Add Another Service" button (the page has one Save button).
   final Package? editing;
   final bool standalone;
-  const ServicesPricingStep({super.key, this.editing, this.standalone = false});
+  /// Opened from the admin's "add this special service" notification: the service is pre-selected
+  /// (by id, else by name) when it exists in the server list. Ignored when [editing] is set.
+  final int? presetSubCategoryId;
+  final String? presetServiceName;
+  const ServicesPricingStep({
+    super.key,
+    this.editing,
+    this.standalone = false,
+    this.presetSubCategoryId,
+    this.presetServiceName,
+  });
 
   @override
   State<ServicesPricingStep> createState() => ServicesPricingStepState();
@@ -261,10 +271,27 @@ class ServicesPricingStepState extends State<ServicesPricingStep> implements Art
     _load();
   }
 
+  /// Add mode opened from a notification: pre-selects the special service (nothing else is filled in).
+  void _applyPreset() {
+    if (_category != null) return;
+    final id = widget.presetSubCategoryId;
+    final name = (widget.presetServiceName ?? '').trim().toLowerCase();
+    for (final s in _subs) {
+      if ((id != null && s.subCategoryId == id) || (name.isNotEmpty && s.name.trim().toLowerCase() == name)) {
+        _category = s.name;
+        return;
+      }
+    }
+  }
+
   /// Edit mode: fills the form with the package being edited.
   void _prefillForEdit() {
     final e = widget.editing;
-    if (e == null || _category != null) return;
+    if (e == null) {
+      _applyPreset();
+      return;
+    }
+    if (_category != null) return;
     final match = _subs.where((x) => x.subCategoryId == e.subCategoryId);
     _category = match.isNotEmpty ? match.first.name : e.name;
     _makeupType = (e.makeupType ?? '').isEmpty ? null : e.makeupType;
@@ -706,7 +733,11 @@ class ServicesPricingStepState extends State<ServicesPricingStep> implements Art
                       subtitle: 'Select One For This Service.',
                       options: _serviceOptions,
                       selected: _category,
-                      otherSubtitle: 'Add Your Own Service');
+                      // No "Other / Add Your Own Service" here on purpose: a typed-in name has no service id on the
+                      // server (so saving always failed with "not available") and free-text names bring spelling
+                      // mistakes. Special-occasion services (Karwa Chauth, Diwali, New Year…) are opened by the admin
+                      // from the backend and then simply appear in this list.
+                      );
                   if (v != null) setState(() => _category = v);
                 },
               ),

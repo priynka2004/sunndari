@@ -72,11 +72,11 @@ class ArtistAddOn {
 
 // ───────────────────────── Service areas ─────────────────────────
 
-/// Area the artist travels to. Travel charge is `free` or `per_visit` only (per-km is rejected).
+/// Area the artist travels to. Travel charge is `free`, `per_visit` or `per_km`.
 class ArtistServiceArea {
   final int serviceAreaId;
   final String city;
-  final String travelChargeType; // free | per_visit
+  final String travelChargeType; // free | per_visit | per_km
   final double travelCharge;
   final bool isActive;
 

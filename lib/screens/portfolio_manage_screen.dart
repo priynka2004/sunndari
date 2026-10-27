@@ -22,6 +22,7 @@ import '../utils/app_feedback.dart';
 import '../utils/service_locator.dart';
 import '../utils/media_url.dart';
 import 'portfolio_detail_screen.dart';
+import 'onboarding/artist_page_services_steps.dart' show kMakeupTypeCategory;
 import '../utils/api_logger.dart';
 
 /// SCREEN: Portfolio — grid of photos/videos, upload, reorder, open detail.
@@ -42,6 +43,19 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
   List<ServiceSubCategory> _subCategories = [];
 
   int? _sharingId;
+
+  /// Categories the artist can pick for a photo: active ones, without the helper "Makeup Type" rows
+  /// (HD / Airbrush share names with real services and only confuse the list).
+  List<ServiceSubCategory> get _pickableSubCategories => _subCategories
+      .where((s) => s.isActive && (s.categoryName ?? '').trim().toLowerCase() != kMakeupTypeCategory.toLowerCase())
+      .toList();
+
+  /// Category (service) name shown on a photo; falls back to the caption, then nothing.
+  String _categoryLabel(Portfolio p) {
+    final m = _subCategories.where((s) => s.subCategoryId == p.subCategoryId);
+    if (m.isNotEmpty && m.first.name.trim().isNotEmpty) return m.first.name.trim();
+    return (p.caption ?? '').trim();
+  }
 
   /// Runs once when the screen opens; starts: _load().
   @override
@@ -90,8 +104,8 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
     if (xfile == null) return;
     if (!mounted) return;
 
-    int? subCategoryId =
-    _subCategories.isNotEmpty ? _subCategories.first.subCategoryId : null;
+    final pickable = _pickableSubCategories;
+    int? subCategoryId = pickable.isNotEmpty ? pickable.first.subCategoryId : null;
 
     final captionCtrl = TextEditingController();
 
@@ -130,7 +144,7 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
 
                     const SizedBox(height: 20),
 
-                    if (_subCategories.isNotEmpty)
+                    if (pickable.isNotEmpty)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14),
                         decoration: BoxDecoration(
@@ -142,7 +156,7 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
                           child: DropdownButton<int>(
                             isExpanded: true,
                             value: subCategoryId,
-                            items: _subCategories
+                            items: pickable
                                 .map(
                                   (s) => DropdownMenuItem<int>(
                                 value: s.subCategoryId,
@@ -385,7 +399,7 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
                               ),
                             ),
                           ),
-                          if (p.caption != null && p.caption!.isNotEmpty)
+                          if (_categoryLabel(p).isNotEmpty)
                             Positioned(
                               left: 0,
                               right: 0,
@@ -393,7 +407,7 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                                 color: Colors.black38,
-                                child: Text(p.caption!,
+                                child: Text(_categoryLabel(p),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: AiraText.sans(fontSize: 11, color: Colors.white)),

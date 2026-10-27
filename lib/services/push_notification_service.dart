@@ -17,6 +17,8 @@ import '../screens/chat_screen.dart';
 import '../screens/booking_detail_screen.dart';
 import '../screens/notification_detail_screen.dart';
 import '../screens/help_center_screen.dart';
+import '../screens/packages_screen.dart' show AddServiceFromNotificationScreen;
+import '../models/notification/app_notification.dart' show isAddServiceNotificationType;
 import '../utils/app_session.dart';
 import '../utils/nav_key.dart';
 import '../utils/notification_badge.dart';
@@ -199,17 +201,17 @@ class PushNotificationService {
     }
   }
 
-  /// Prints token for testing.
+  /// Prints token for testing — switched off (commented out) so the FCM token no longer shows in the log.
   Future<void> _printTokenForTesting() async {
-    if (!kDebugMode) return;
-    try {
-      final token = await FirebaseMessaging.instance.getToken();
-      debugPrint('=================== FCM TOKEN ===================');
-      debugPrint(token);
-      debugPrint('==================================================');
-    } catch (e) {
-      debugPrint('[Push] failed to fetch FCM token for testing: $e');
-    }
+    // if (!kDebugMode) return;
+    // try {
+    //   final token = await FirebaseMessaging.instance.getToken();
+    //   debugPrint('=================== FCM TOKEN ===================');
+    //   debugPrint(token);
+    //   debugPrint('==================================================');
+    // } catch (e) {
+    //   debugPrint('[Push] failed to fetch FCM token for testing: $e');
+    // }
   }
 
   /// Subscribes to to own topic.
@@ -359,6 +361,19 @@ class PushNotificationService {
 
     if (type.contains('help')) {
       nav.push(MaterialPageRoute(builder: (_) => const HelpCenterScreen()));
+      return;
+    }
+
+    // Admin's "add this special service" notification → straight to the Add Service screen.
+    // (Only this type; every other notification below keeps its old navigation.)
+    if (isAddServiceNotificationType(type)) {
+      nav.push(MaterialPageRoute(
+        builder: (_) => AddServiceFromNotificationScreen(
+          subCategoryId: int.tryParse(
+              '${data['referenceId'] ?? data['reference_id'] ?? data['sub_category_id'] ?? data['subCategoryId'] ?? ''}'),
+          serviceName: (data['service_name'] ?? data['serviceName'])?.toString(),
+        ),
+      ));
       return;
     }
 

@@ -8,7 +8,7 @@ import '../utils/app_feedback.dart';
 import '../utils/service_locator.dart';
 import '../widgets/common.dart';
 import '../widgets/reschedule_widgets.dart';
-import '../widgets/sunndari_time_picker.dart';
+import '../widgets/available_slots_picker.dart';
 
 /// SCREEN: Reschedule Request — customer asked to move a booking; artist accepts / suggests another time / declines.
 class RescheduleRequestScreen extends StatefulWidget {
@@ -96,6 +96,47 @@ class _RescheduleRequestScreenState extends State<RescheduleRequestScreen> {
         child: child!,
       );
 
+  /// Bottom sheet with the day's available / booked slots (no free time entry).
+  Future<TimeOfDay?> _pickSlot(DateTime date) {
+    TimeOfDay? picked;
+    return showModalBottomSheet<TimeOfDay>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AiraColors.bg,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Choose An Available Slot', style: AiraText.serif(fontSize: 20)),
+                const SizedBox(height: 4),
+                Text('${date.day}/${date.month}/${date.year}',
+                    style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AiraColors.rose)),
+                const SizedBox(height: 12),
+                AvailableSlotsPicker(
+                  date: date,
+                  excludeBookingId: widget.request.bookingId,
+                  selected: picked,
+                  onSelected: (t) => setSheet(() => picked = t),
+                ),
+                const SizedBox(height: 16),
+                PrimaryButton(
+                  label: 'Send Suggestion',
+                  expand: true,
+                  onTap: picked == null ? null : () => Navigator.of(ctx).pop(picked),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// API: rescheduleService.suggestAnother
   Future<void> _suggest() async {
     final now = DateTime.now();
@@ -108,11 +149,7 @@ class _RescheduleRequestScreenState extends State<RescheduleRequestScreen> {
       builder: _themed,
     );
     if (d == null || !mounted) return;
-    final t = await pickSunndariTime(
-      context,
-      helpText: 'Suggest Another Time',
-      initial: TimeOfDay.fromDateTime(widget.request.newStart),
-    );
+    final t = await _pickSlot(d);
     if (t == null || !mounted) return;
     final suggested = DateTime(d.year, d.month, d.day, t.hour, t.minute);
     if (!suggested.isAfter(now)) {

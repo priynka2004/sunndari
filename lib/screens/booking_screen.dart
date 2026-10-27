@@ -1,3 +1,4 @@
+import 'dart:async';
 // FILE: screens/booking_screen.dart
 // SCREEN: Bookings tab — list of bookings (Upcoming / Completed / Cancelled) with search and filters.
 
@@ -52,6 +53,7 @@ class _BookingScreenState extends State<BookingScreen> {
   /// Frees controllers / listeners when the screen closes.
   @override
   void dispose() {
+    _missedTicker?.cancel();
     _search.dispose();
     super.dispose();
   }
@@ -63,7 +65,13 @@ class _BookingScreenState extends State<BookingScreen> {
     final now = DateTime.now();
     _selectedDate = DateTime(now.year, now.month, now.day);
     _loadReschedules();
+    // Re-evaluate Missed every 30s so Accept disappears the moment the appointment time passes.
+    _missedTicker = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
   }
+
+  Timer? _missedTicker;
 
   Map<int, BookingReschedule> _reschedules = {};
 
@@ -183,11 +191,19 @@ class _BookingScreenState extends State<BookingScreen> {
   };
 
   /// Returns true if missed.
-  bool _isMissed(BookingSlot s) =>
-      s.isMissed &&
-          (s.status == SlotStatus.pending ||
-              s.status == SlotStatus.confirmed ||
-              s.status == SlotStatus.inProgress);
+  /// Missed rules (never for completed / cancelled / in-progress bookings):
+  /// - Pending request: Missed as soon as the scheduled time has passed (Accept is no longer possible).
+  /// - Confirmed booking whose service was never started: Missed once the scheduled time + 2h grace
+  ///   (time to still mark "On my way") has passed, or the date is already in the past.
+  /// A booking accepted before its time is NOT auto-missed while it is still on time.
+  bool _isMissed(BookingSlot s) {
+    if (s.status == SlotStatus.pending) {
+      final start = s.startDateTime;
+      return s.isPastDate || (start != null && !DateTime.now().isBefore(start));
+    }
+    if (s.status == SlotStatus.confirmed) return s.isMissed;
+    return false;
+  }
 
   /// Display status label.
   String _displayStatusLabel(BookingSlot s) {
@@ -286,7 +302,16 @@ class _BookingScreenState extends State<BookingScreen> {
                           PrimaryButton(
                             label: 'Accept',
                             small: true,
-                            onTap: () => widget.onUpdateStatus!(s, SlotStatus.confirmed),
+                            onTap: () {
+                              // Re-check at tap time: the appointment time may have passed while the list was open.
+                              if (_isMissed(s)) {
+                                setState(() {});
+                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                    content: Text('This Booking Time Has Passed, So It Can No Longer Be Accepted.')));
+                                return;
+                              }
+                              widget.onUpdateStatus!(s, SlotStatus.confirmed);
+                            },
                           ),
                           const SizedBox(width: 8),
                           GhostButton(
@@ -356,6 +381,8 @@ class _BookingScreenState extends State<BookingScreen> {
       (s.status == SlotStatus.confirmed || s.status == SlotStatus.inProgress) && !_isMissed(s);
   /// Returns true if completed.
   bool _isCompleted(BookingSlot s) => s.status == SlotStatus.completed;
+  /// Missed bookings get their own tab (they no longer sit under Requests / Upcoming).
+  bool _isMissedTab(BookingSlot s) => _isMissed(s);
 
   /// For tab.
   List<BookingSlot> _forTab(String tab) {
@@ -364,6 +391,7 @@ class _BookingScreenState extends State<BookingScreen> {
         .where(switch (tab) {
       'upcoming' => _isUpcoming,
       'completed' => _isCompleted,
+      'missed' => _isMissedTab,
       _ => _isRequest,
     })
         .where(_inRange)
@@ -371,7 +399,7 @@ class _BookingScreenState extends State<BookingScreen> {
         .toList();
     list.sort((a, b) {
       final c = a.date.compareTo(b.date);
-      return tab == 'completed' ? -c : (c != 0 ? c : a.time.compareTo(b.time));
+      return (tab == 'completed' || tab == 'missed') ? -c : (c != 0 ? c : a.time.compareTo(b.time));
     });
     return list;
   }
@@ -383,15 +411,15 @@ class _BookingScreenState extends State<BookingScreen> {
       child: GestureDetector(
         onTap: () => setState(() => _tab = key),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 11),
+          padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 2),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: on ? AiraColors.roseDeep : Colors.white,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: on ? AiraColors.roseDeep : AiraColors.hair),
           ),
-          child: Text('$label ($count)',
-              style: AiraText.sans(fontSize: 12, fontWeight: FontWeight.w700, color: on ? Colors.white : AiraColors.charcoal)),
+          child: FittedBox(fit: BoxFit.scaleDown, child: Text('$label ($count)',
+              style: AiraText.sans(fontSize: 12, fontWeight: FontWeight.w700, color: on ? Colors.white : AiraColors.charcoal))),
         ),
       ),
     );
@@ -427,6 +455,7 @@ class _BookingScreenState extends State<BookingScreen> {
     final (title, body) = switch (tab) {
       'upcoming' => ('No Upcoming Bookings', 'Accepted Bookings Will Show Up Here.'),
       'completed' => ('No Completed Bookings Yet', 'Finished Appointments Will Be Listed Here.'),
+      'missed' => ('No Missed Bookings', 'Bookings Whose Time Passed Without Being Completed Will Show Up Here.'),
       _ => ('No Booking Requests Yet', 'New Requests Will Appear Here When A Client Books Your Services.'),
     };
     final searching = _search.text.trim().isNotEmpty || _customRange != null;
@@ -459,6 +488,7 @@ class _BookingScreenState extends State<BookingScreen> {
     final requests = widget.slots.where((s) => s.bookingId != null && _isRequest(s)).length;
     final upcoming = widget.slots.where((s) => s.bookingId != null && _isUpcoming(s)).length;
     final completed = widget.slots.where((s) => s.bookingId != null && _isCompleted(s)).length;
+    final missed = widget.slots.where((s) => s.bookingId != null && _isMissed(s)).length;
     final list = _forTab(_tab);
 
     return ListView(
@@ -512,6 +542,8 @@ class _BookingScreenState extends State<BookingScreen> {
             const SizedBox(width: 8),
             _tabPill('completed', 'Completed', completed),
             const SizedBox(width: 8),
+            _tabPill('missed', 'Missed', missed),
+            const SizedBox(width: 8),
             GestureDetector(
               onTap: _customRange == null ? _pickRange : () => setState(() => _customRange = null),
               child: Container(
@@ -560,9 +592,9 @@ class _BookingScreenState extends State<BookingScreen> {
                 ],
               ),
               const SizedBox(height: 12),
-              _readyRow(Icons.calendar_month_outlined, 'Keep Your Calendar Updated', 'Make Sure Your Availability Is Correct.',
-                  // Switches to the Calendar tab (no second copy of the screen)
-                      () => widget.onNavigate?.call('calendar')),
+              // _readyRow(Icons.calendar_month_outlined, 'Keep Your Calendar Updated', 'Make Sure Your Availability Is Correct.',
+              //     // Switches to the Calendar tab (no second copy of the screen)
+              //         () => widget.onNavigate?.call('calendar')),
               _readyRow(Icons.receipt_long_outlined, 'Review Your Services & Pricing', 'Keep Your Offerings Fresh And Clear.',
                   // Navigates to BusinessDetailsScreen
                       () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BusinessDetailsScreen(initialTab: 'package')))),

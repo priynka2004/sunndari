@@ -22,6 +22,7 @@ import 'utils/app_session.dart';
 import 'utils/app_feedback.dart';
 import 'utils/notification_badge.dart';
 import 'services/push_notification_service.dart';
+import 'services/service_announcement_service.dart';
 import 'api/help_center_notifier.dart';
 import 'utils/autostart_helper.dart';
 import 'models/artist/artist_profile.dart';
@@ -72,7 +73,11 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
     _loadData();
     // Auto-refresh: every 45 s while the app is open, and whenever a push arrives.
     _autoRefreshTimer = Timer.periodic(const Duration(seconds: 45), (_) {
-      if (_appInForeground) _loadData(silent: true);
+      if (_appInForeground) {
+        _loadData(silent: true);
+        // A "new service" popup that had to wait (another screen was open) is retried here.
+        if (ServiceAnnouncementService.instance.hasDeferred) _checkServiceAnnouncements();
+      }
     });
     NotificationBadge.instance.newNotificationTick.addListener(_onPushArrived);
     PushNotificationService.instance.initMessaging();
@@ -96,11 +101,22 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
     if (_appInForeground) {
       _loadData(silent: true); // coming back to the app → fetch the latest
       NotificationBadge.instance.refresh();
+      _checkServiceAnnouncements();
     }
   }
 
-  /// A push notification arrived while the app is open → refresh bookings.
-  void _onPushArrived() => _loadData(silent: true);
+  /// A push notification arrived while the app is open → refresh bookings (and look for a new-service popup).
+  void _onPushArrived() {
+    _loadData(silent: true);
+    _checkServiceAnnouncements();
+  }
+
+  /// Admin announced a new service → popup on the home screen (see services/service_announcement_service.dart).
+  /// Runs only after the profile gate passed (so an unapproved / incomplete artist never gets it).
+  void _checkServiceAnnouncements({bool force = false}) {
+    if (!mounted || !_gateChecked) return;
+    ServiceAnnouncementService.instance.checkAndShow(context, force: force);
+  }
 
   /// Enforces profile gate.
   Future<void> _enforceProfileGate() async {
@@ -120,6 +136,8 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
         return;
       }
       setState(() => _gateChecked = true);
+      // First look for a "new service" announcement as soon as the home screen is ready.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _checkServiceAnnouncements(force: true));
       return;
     }
     Navigator.of(context).pushAndRemoveUntil(
@@ -248,7 +266,7 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
     try {
       final results = await Future.wait([
         ServiceLocator.artistService.getProfile(),
-        ServiceLocator.bookingService.getAllBookings(limit: 300),
+        ServiceLocator.bookingService.getAllBookings(limit: 200),
       ]);
       final profile = results[0] as ArtistProfile;
       // The server returns PAID bookings only (filter_key=paymentStatus&filter_value=paid).
@@ -641,6 +659,7 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
           showCompleteProfileBanner: !_loading && _profileIncomplete,
           profileHint: _profileHint,
           todaysBookings: todaysSlots, // PASSING THE DATA HERE
+          acceptingBookings: _profile?.isAcceptingBookings ?? true,
           onCompleteProfile: () => _navigate('profile'),
           briefingText: todays.isEmpty
               ? "You're All Clear — No Bookings On The Calendar Today."

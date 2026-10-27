@@ -131,6 +131,8 @@ class ApiEndpoints {
   static const String coreServiceCategoryGetAll = '/core/service-category/get_all/';
   static const String coreServiceSubCategoryGet = '/core/service-sub-category/get/';
   static const String coreServiceSubCategoryGetAll = '/core/service-sub-category/get_all/';
+  /// Artist only: services the admin announced in the last 15 days that this artist has not added yet.
+  static const String coreServiceSubCategoryRecentlyActivated = '/core/service-sub-category/recently_activated/';
 
   static const String apiSchema = '/api/schema/';
 

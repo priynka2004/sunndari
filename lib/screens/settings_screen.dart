@@ -19,6 +19,7 @@ import 'auth/registration_status_screen.dart';
 import 'help_center_screen.dart';
 import 'support_tickets_screen.dart';
 import 'calendar_screen.dart';
+import 'edit_working_hours_screen.dart';
 import 'public_profile_preview_screen.dart';
 import 'auth/forgot_password_screen.dart';
 import '../utils/share_profile.dart';
@@ -305,6 +306,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         // Navigates to EditAddServiceScreen (Services & Pricing only)
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EditAddServiceScreen()));
         _load();
+      } else if (row == 'Edit Working Hours') {
+        // Navigates to EditWorkingHoursScreen (per-day timings, same as onboarding)
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EditWorkingHoursScreen()));
       } else if (row == 'Business') {
         // Navigates to BusinessDetailsScreen (Locations | Portfolio | KYC tabs)
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BusinessDetailsScreen(initialTab: 'setup')));
@@ -530,6 +534,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
           group('My Business', const [
             (Icons.design_services_outlined, 'Edit & Add Service'),
+            (Icons.access_time_rounded, 'Edit Working Hours'),
             (Icons.storefront_outlined, 'Business'),
           ]),
           group('Grow', const [

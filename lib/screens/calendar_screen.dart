@@ -1,10 +1,10 @@
 // FILE: screens/calendar_screen.dart
-// SCREEN: Calendar tab — week strip, bookings per day, set working hours, block days off.
+// SCREEN: Calendar tab — month view, bookings per day, block days / hours.
+// (Working hours are edited from Profile → My Business → Edit Working Hours.)
 //
 // APIs used:
 //   GET /artists/availability/schedule/get_all/
 //   GET /artists/availability/block/get_all/
-//   POST /artists/availability/schedule/set/
 //   POST /artists/availability/block/add/
 
 import 'package:flutter/material.dart';
@@ -13,14 +13,12 @@ import '../models/models.dart';
 import '../models/core/status_item.dart';
 import '../models/booking/booking_reschedule.dart';
 import 'booking_detail_screen.dart';
-import '../models/auth/set_schedule.dart';
 import '../theme/tokens.dart';
 import '../utils/app_feedback.dart';
 import '../utils/service_locator.dart';
 import '../widgets/common.dart';
-import '../widgets/sunndari_time_picker.dart';
 
-/// SCREEN: Calendar tab — week strip, bookings per day, set working hours, block days off.
+/// SCREEN: Calendar tab — month view, bookings per day, block days / hours.
 class CalendarScreen extends StatefulWidget {
   final bool showBack;
 
@@ -51,10 +49,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     'July', 'August', 'September', 'October', 'November', 'December'
   ];
 
-  late DateTime _weekStart;
   late DateTime _selected;
-  late DateTime _visibleMonth;
-  String _view = 'week'; // 'week' | 'month' | 'hours'
+  String _view = 'month'; // 'month' | 'day'
   bool _loading = true;
   bool _saving = false;
 
@@ -65,7 +61,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
   final Map<String, List<List<int>>> _partial = {}; // date -> blocked ranges [startMin, endMin]
   final Set<String> _onServer = {}; // dates that already have time-range blocks on the server
   final Set<String> _dirty = {}; // dates with unsaved slot changes
-  final Set<int> _wasScheduled = {}; // days that exist on the server (to remove when switched off)
 
   /// Runs once when the screen opens; starts: _load(), _loadReschedules().
   @override
@@ -73,8 +68,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     super.initState();
     final now = DateTime.now();
     _selected = DateTime(now.year, now.month, now.day);
-    _visibleMonth = DateTime(now.year, now.month, 1);
-    _weekStart = _selected.subtract(Duration(days: _selected.weekday - 1));
     _load();
     _loadReschedules();
   }
@@ -174,13 +167,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
   List<Widget> _bookingsSection() {
     final list = _bookingsOn(_selected);
     return [
-      Text('Bookings', style: AiraText.serif(fontSize: 18)),
+      Text('Bookings', style: AiraText.serif(fontSize: 21)),
       const SizedBox(height: 8),
       if (list.isEmpty)
         Padding(
           padding: const EdgeInsets.only(bottom: 4),
           child: Text('No Confirmed Bookings On This Day.',
-              style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft)),
+              style: AiraText.sans(fontSize: 16, color: AiraColors.charcoalSoft)),
         )
       else
         for (final s in list)
@@ -197,10 +190,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(s.time, style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoalSoft)),
+                        Text(s.time, style: AiraText.sans(fontSize: 13, color: AiraColors.charcoalSoft)),
                         Text(s.client == '—' ? s.service : s.client,
-                            style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                        Text(s.service, style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft)),
+                            style: AiraText.sans(fontSize: 16, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
+                        Text(s.service, style: AiraText.sans(fontSize: 13.5, color: AiraColors.charcoalSoft)),
                       ],
                     ),
                   ),
@@ -215,7 +208,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         ),
                         child: Text(_slotBadge(s),
                             style: AiraText.sans(
-                                fontSize: 10.5,
+                                fontSize: 12,
                                 fontWeight: FontWeight.w600,
                                 color: (_reschedules[s.bookingId]?.isPending ?? false)
                                     ? const Color(0xFF8A6A1F)
@@ -265,8 +258,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   void _select(DateTime d) {
     _selected = d;
-    _weekStart = d.subtract(Duration(days: d.weekday - 1));
-    _visibleMonth = DateTime(d.year, d.month, 1);
   }
 
   /// Minutes since midnight from "HH:MM[:SS]" (null when missing).
@@ -334,7 +325,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final slots = _slots();
     final blockedNow = <int>{
       for (final sl in slots)
-        if (_slotBlocked(iso, sl)) sl[0],
+        if (!_slotBooked(iso, sl) && _slotBlocked(iso, sl)) sl[0],
     };
     blockedNow.contains(slot[0]) ? blockedNow.remove(slot[0]) : blockedNow.add(slot[0]);
     final ranges = <List<int>>[];
@@ -408,7 +399,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
         final d = m['dayOfWeek'];
         if (d is! int) continue;
         _available[d] = true;
-        _wasScheduled.add(d);
         _start[d] = _parse(m['startTime'], const TimeOfDay(hour: 9, minute: 0));
         _end[d] = _parse(m['endTime'], const TimeOfDay(hour: 18, minute: 0));
       }
@@ -419,62 +409,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   int get _dow => _selected.weekday - 1;
-  /// Returns true if available.
-  bool get _isAvailable => (_available[_dow] ?? false) && !_blocked.contains(_iso(_selected));
-  /// "Open 24 Hours" = 12:00 AM to 11:59 PM (a day's hours cannot cross midnight).
-  static const _open = TimeOfDay(hour: 0, minute: 0);
-  static const _close = TimeOfDay(hour: 23, minute: 59);
-  bool _is24h(TimeOfDay a, TimeOfDay b) => a.hour == 0 && a.minute == 0 && b.hour == 23 && b.minute == 59;
-
   TimeOfDay get _s => _start[_dow] ?? const TimeOfDay(hour: 9, minute: 0);
   TimeOfDay get _e => _end[_dow] ?? const TimeOfDay(hour: 18, minute: 0);
-
-  /// Lets the user pick time.
-  Future<void> _pickTime(bool start) async {
-    final t = await pickSunndariTime(context, initial: start ? _s : _e, helpText: start ? 'Start Time' : 'End Time');
-    if (t == null) return;
-    setState(() => start ? _start[_dow] = t : _end[_dow] = t);
-  }
-
-  /// Saves the entered data.
-  /// API: artistService.setSchedule → POST /artists/availability/schedule/set/
-  Future<void> _save() async {
-    for (var d = 0; d < 7; d++) {
-      if (_available[d] != true) continue;
-      final st = _start[d] ?? const TimeOfDay(hour: 9, minute: 0);
-      final en = _end[d] ?? const TimeOfDay(hour: 18, minute: 0);
-      if (en.hour * 60 + en.minute <= st.hour * 60 + st.minute) {
-        AppFeedback.showWarning(context, 'End Time Must Be After Start Time (${_weekNames[d]}).');
-        return;
-      }
-    }
-    setState(() => _saving = true);
-    try {
-      final art = ServiceLocator.artistService;
-      for (var d = 0; d < 7; d++) {
-        if (_available[d] == true) {
-          // API call: artistService.setSchedule → POST /artists/availability/schedule/set/
-          await art.setSchedule(SetSchedule(
-            dayOfWeek: d,
-            startTime: _fmt(_start[d] ?? const TimeOfDay(hour: 9, minute: 0)),
-            endTime: _fmt(_end[d] ?? const TimeOfDay(hour: 18, minute: 0)),
-          ));
-        }
-        else if (_wasScheduled.contains(d)) {
-          // API call: artistService.removeSchedule → DELETE /artists/availability/schedule/remove/
-          await art.removeSchedule(d);
-        }
-      }
-      _wasScheduled
-        ..clear()
-        ..addAll([for (var d = 0; d < 7; d++) if (_available[d] == true) d]);
-      if (mounted) AppFeedback.showSuccess(context, 'Working Hours Saved ✓');
-    } catch (e) {
-      if (mounted) AppFeedback.showError(context, e);
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
 
   /// Asks for confirmation, then blocks / unblocks the selected day (single place for Block Time).
   Future<void> _toggleBlock() async {
@@ -536,169 +472,67 @@ class _CalendarScreenState extends State<CalendarScreen> {
     }
   }
 
-  static const _weekNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-  /// Weekly working hours: pick the days and one start / end time, then it saves straight away.
-  Future<void> _openWeeklyHours() async {
-    final days = <int>{for (var d = 0; d < 7; d++) if (_available[d] == true) d};
-    if (days.isEmpty) days.addAll([0, 1, 2, 3, 4, 5]);
-    var start = _s, end = _e;
-    String? problem;
-    final apply = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AiraColors.bg,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheet) {
-          Future<void> pick(bool isStart) async {
-            final t = await pickSunndariTime(ctx, initial: isStart ? start : end, helpText: isStart ? 'Start Time' : 'End Time');
-            if (t != null) setSheet(() { isStart ? start = t : end = t; problem = null; });
-          }
-          Widget timeTile(String label, TimeOfDay t, bool isStart) => Expanded(
-            child: GestureDetector(
-              onTap: () => pick(isStart),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                decoration: BoxDecoration(
-                  color: AiraColors.pinkFill,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AiraColors.pinkBorder, width: 1.1),
-                ),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(label, style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft)),
-                  const SizedBox(height: 2),
-                  Text(t.format(ctx), style: AiraText.sans(fontSize: 15, fontWeight: FontWeight.w700)),
-                ]),
-              ),
-            ),
-          );
-          return Padding(
-            padding: EdgeInsets.fromLTRB(20, 18, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Weekly Working Hours', style: AiraText.serif(fontSize: 20)),
-                const SizedBox(height: 4),
-                Text('Choose The Days You Work And Your Daily Hours.',
-                    style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft)),
-                const SizedBox(height: 16),
-                Wrap(spacing: 8, runSpacing: 8, children: [
-                  for (var d = 0; d < 7; d++)
-                    GestureDetector(
-                      onTap: () => setSheet(() { days.contains(d) ? days.remove(d) : days.add(d); problem = null; }),
-                      child: Container(
-                        width: 44,
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          gradient: days.contains(d) ? AiraGradients.aira : null,
-                          color: days.contains(d) ? null : AiraColors.pinkFill,
-                          borderRadius: BorderRadius.circular(12),
-                          border: days.contains(d) ? null : Border.all(color: AiraColors.pinkBorder),
-                        ),
-                        child: Text(_weekNames[d],
-                            style: AiraText.sans(fontSize: 12, fontWeight: FontWeight.w700,
-                                color: days.contains(d) ? Colors.white : AiraColors.charcoal)),
-                      ),
-                    ),
-                ]),
-                const SizedBox(height: 16),
-                Row(children: [timeTile('Start Time', start, true), const SizedBox(width: 12), timeTile('End Time', end, false)]),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text('Open 24 Hours (12:00 AM – 11:59 PM)',
-                          style: AiraText.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AiraColors.charcoal)),
-                    ),
-                    Switch(
-                      value: _is24h(start, end),
-                      onChanged: (v) => setSheet(() {
-                        start = v ? _open : const TimeOfDay(hour: 9, minute: 0);
-                        end = v ? _close : const TimeOfDay(hour: 18, minute: 0);
-                        problem = null;
-                      }),
-                      thumbColor: const WidgetStatePropertyAll(Colors.white),
-                      trackColor: WidgetStateProperty.resolveWith(
-                            (states) => states.contains(WidgetState.selected) ? AiraColors.success : null,
-                      ),
-                    ),
-                  ],
-                ),
-                if (problem != null) ...[
-                  const SizedBox(height: 10),
-                  Text(problem!, style: AiraText.sans(fontSize: 12.5, color: AiraColors.errorText)),
-                ],
-                const SizedBox(height: 18),
-                PrimaryButton(
-                  label: 'Save Working Hours',
-                  expand: true,
-                  onTap: () {
-                    if (days.isEmpty) {
-                      setSheet(() => problem = 'Please Select At Least One Working Day.');
-                    } else if (end.hour * 60 + end.minute <= start.hour * 60 + start.minute) {
-                      setSheet(() => problem = 'End Time Must Be After The Start Time.');
-                    } else {
-                      Navigator.of(ctx).pop(true);
-                    }
-                  },
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-    if (apply != true || !mounted) return;
-    setState(() {
-      for (var d = 0; d < 7; d++) {
-        _available[d] = days.contains(d);
-        if (days.contains(d)) {
-          _start[d] = start;
-          _end[d] = end;
-        }
-      }
-    });
-    await _save();
+  /// True for any date before today — these are shown greyed out and cannot be selected.
+  bool _isPast(DateTime d) {
+    final n = DateTime.now();
+    return DateTime(d.year, d.month, d.day).isBefore(DateTime(n.year, n.month, n.day));
   }
 
-  /// Block tab: tap hours to block / open them for the selected day (separate from Working Hours).
-  List<Widget> _blockSection() {
+  // Booking status colours used across the calendar: Open = Green, Blocked = Red, Booked = Yellow.
+  static const _cOpen = AiraColors.success;
+  static const _cBlocked = AiraColors.errorText;
+  static const _cBooked = Color(0xFFE0A100);
+
+  /// Minute ranges already taken by live bookings on [iso] (1 hour from the start time).
+  List<List<int>> _bookedRanges(String iso) {
+    final out = <List<int>>[];
+    for (final s in widget.slots) {
+      if (s.bookingId == null || !_isLive(s) || s.date != iso) continue;
+      final st = _minOrNull(s.rawStartTime);
+      if (st != null) out.add([st, st + 60]);
+    }
+    return out;
+  }
+
+  bool _slotBooked(String iso, List<int> slot) => _bookedRanges(iso).any((r) => slot[0] < r[1] && slot[1] > r[0]);
+
+  /// Colour of a calendar day: yellow = has booking, red = blocked, green = open, null = not working.
+  Color? _dayColor(DateTime d) {
+    if (_isPast(d)) return null; // dates that have passed are inactive
+    final iso = _iso(d);
+    if (_bookingsOn(d).isNotEmpty) return _cBooked;
+    if (_blocked.contains(iso)) return _cBlocked;
+    if (_available[d.weekday - 1] ?? false) return _cOpen;
+    return null;
+  }
+
+  Widget _legend(Color c, String t) => Row(mainAxisSize: MainAxisSize.min, children: [
+    Container(width: 14, height: 14, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(4))),
+    const SizedBox(width: 6),
+    Text(t, style: AiraText.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AiraColors.roseDeep)),
+  ]);
+
+  /// Day tab: tap hours to block / open them for the selected day. Booked hours show yellow and cannot be changed.
+  List<Widget> _daySection() {
     final iso = _iso(_selected);
     final fullDay = _blocked.contains(iso);
     final slots = _slots();
     final working = (_available[_dow] ?? false) && slots.isNotEmpty;
 
-    Widget legend(Color c, String t, {bool fill = false}) => Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-        width: 14,
-        height: 14,
-        decoration: BoxDecoration(
-          color: fill ? c.withOpacity(0.15) : Colors.white,
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: c, width: 1.4),
-        ),
-      ),
-      const SizedBox(width: 6),
-      Text(t, style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoalSoft)),
-    ]);
-
     return [
       if (!working)
         AiraCard(
-          child: Text('You Are Not Working On This Day. Turn It On From The Hours Tab To Block Specific Hours.',
-              style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft, height: 1.4)),
+          child: Text('You Are Not Working On This Day. Add It From Profile → My Business → Edit Working Hours.',
+              style: AiraText.sans(fontSize: 14, color: AiraColors.charcoalSoft, height: 1.4)),
         )
       else ...[
         Text('Tap An Hour To Block Or Open It.',
-            style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft)),
+            style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
         const SizedBox(height: 10),
-        Row(children: [
-          legend(AiraColors.success, 'Open'),
-          const SizedBox(width: 16),
-          legend(AiraColors.errorText, 'Blocked', fill: true),
+        Wrap(spacing: 16, runSpacing: 6, children: [
+          _legend(_cOpen, 'Open'),
+          _legend(_cBlocked, 'Blocked'),
+          _legend(_cBooked, 'Booked'),
         ]),
         const SizedBox(height: 12),
         GridView.count(
@@ -707,40 +541,49 @@ class _CalendarScreenState extends State<CalendarScreen> {
           physics: const NeverScrollableScrollPhysics(),
           mainAxisSpacing: 10,
           crossAxisSpacing: 10,
-          childAspectRatio: 2.4,
+          childAspectRatio: 2.2,
           children: [
             for (final sl in slots)
               Builder(builder: (_) {
-                final blocked = _slotBlocked(iso, sl);
-                final c = blocked ? AiraColors.errorText : AiraColors.success;
+                final now = DateTime.now();
+                final isToday = _sameDay(_selected, now);
+                // Hours that have already passed today are greyed out and cannot be changed.
+                final past = _isPast(_selected) || (isToday && sl[1] <= now.hour * 60 + now.minute);
+                final booked = !past && _slotBooked(iso, sl);
+                final blocked = !past && !booked && _slotBlocked(iso, sl);
+                final c = past ? AiraColors.charcoalSoft : (booked ? _cBooked : (blocked ? _cBlocked : _cOpen));
                 return GestureDetector(
-                  onTap: () => _toggleSlot(sl),
+                  onTap: past
+                      ? null
+                      : booked
+                      ? () => AppFeedback.showInfo(context, 'This Hour Is Already Booked.')
+                      : () => _toggleSlot(sl),
                   child: Container(
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: blocked ? c.withOpacity(0.12) : Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: c, width: 1.4),
+                      color: c.withOpacity(past ? 0.08 : 0.16),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: past ? c.withOpacity(0.35) : c, width: 1.6),
                     ),
                     child: Text(_label(_tod(sl[0])),
                         style: AiraText.sans(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: blocked ? c : AiraColors.charcoal,
-                        )),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: past ? AiraColors.charcoalSoft.withOpacity(0.5) : AiraColors.charcoal)),
                   ),
                 );
               }),
           ],
         ),
         const SizedBox(height: 14),
-        if (_dirty.contains(iso))
+        if (_dirty.contains(iso)) ...[
           PrimaryButton(
             label: _saving ? 'Saving…' : 'Save Blocked Hours',
             expand: true,
             onTap: _saving ? null : _saveSlots,
           ),
-        if (_dirty.contains(iso)) const SizedBox(height: 8),
+          const SizedBox(height: 8),
+        ],
       ],
       GhostButton(
         label: fullDay ? 'Unblock This Day' : 'Block Full Day',
@@ -750,114 +593,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
       ),
       const SizedBox(height: 6),
       Text('Blocked Hours Are Hidden From Clients.',
-          style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoalSoft)),
+          style: AiraText.sans(fontSize: 13, color: AiraColors.charcoalSoft)),
       const SizedBox(height: 8),
     ];
   }
 
-  /// UI piece: time box.
-  Widget _timeBox(String label, TimeOfDay t, bool start) => Expanded(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft)),
-        const SizedBox(height: 4),
-        GestureDetector(
-          onTap: () => _pickTime(start),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-            decoration: BoxDecoration(
-              color: AiraColors.pinkFill,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AiraColors.pinkBorder),
-            ),
-            child: Row(
-              children: [
-                Expanded(child: Text(_label(t), style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w600))),
-                const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: AiraColors.roseDeep),
-              ],
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-
-  /// UI piece: week strip.
-  Widget _weekStrip() {
-    final end = _weekStart.add(const Duration(days: 6));
-    final range = '${_weekStart.day} ${_months[_weekStart.month - 1].substring(0, 3)} – '
-        '${end.day} ${_months[end.month - 1].substring(0, 3)} ${end.year}';
-    return AiraCard(
-      padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              IconButton(
-                onPressed: () => setState(() => _weekStart = _weekStart.subtract(const Duration(days: 7))),
-                icon: const Icon(Icons.chevron_left_rounded, color: AiraColors.rose),
-              ),
-              Expanded(
-                child: Center(
-                  child: Text(range,
-                      style: AiraText.sans(fontSize: 14.5, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                ),
-              ),
-              IconButton(
-                onPressed: () => setState(() => _weekStart = _weekStart.add(const Duration(days: 7))),
-                icon: const Icon(Icons.chevron_right_rounded, color: AiraColors.rose),
-              ),
-            ],
-          ),
-          Row(
-            children: List.generate(7, (i) {
-              final d = _weekStart.add(Duration(days: i));
-              final sel = _sameDay(d, _selected);
-              return Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _select(d)),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 2),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    decoration: BoxDecoration(
-                      gradient: sel ? AiraGradients.button : null,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      children: [
-                        Text(_dayShort[i],
-                            style: AiraText.sans(fontSize: 11, color: sel ? Colors.white : AiraColors.charcoalSoft)),
-                        const SizedBox(height: 4),
-                        Text('${d.day}',
-                            style: AiraText.sans(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: sel ? Colors.white : AiraColors.roseDeep)),
-                        const SizedBox(height: 3),
-                        Container(
-                          width: 5,
-                          height: 5,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: _bookingsOn(d).isEmpty
-                                ? Colors.transparent
-                                : (sel ? Colors.white : AiraColors.rose),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// UI piece: segment (Week | Month | Hours | Block).
+  /// UI piece: segment (Month | Day).
   Widget _segment() => Container(
     padding: const EdgeInsets.all(3),
     decoration: BoxDecoration(
@@ -867,12 +608,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
     ),
     child: Row(
       children: [
-        for (final e in {'Week': 'week', 'Month': 'month', 'Hours': 'hours', 'Block': 'block'}.entries)
+        for (final e in {'Bookings': 'month', 'Day': 'day'}.entries)
           Expanded(
             child: GestureDetector(
               onTap: () => setState(() => _view = e.value),
               child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
+                padding: const EdgeInsets.symmetric(vertical: 11),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   gradient: _view == e.value ? AiraGradients.button : null,
@@ -880,8 +621,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 ),
                 child: Text(e.key,
                     style: AiraText.sans(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
                       color: _view == e.value ? Colors.white : AiraColors.roseDeep,
                     )),
               ),
@@ -891,69 +632,72 @@ class _CalendarScreenState extends State<CalendarScreen> {
     ),
   );
 
-  /// UI piece: month grid.
-  Widget _monthGrid() {
-    final first = _visibleMonth;
-    final days = DateTime(first.year, first.month + 1, 0).day;
-    final offset = first.weekday - 1;
+  /// How many days ahead the date slider shows (starting today; days that already passed are never shown).
+  static const _sliderDays = 90;
+
+  /// UI piece: horizontal date slider (like a flight-booking date strip) — replaces the month grid.
+  /// Each day is coloured Open (green) / Blocked (red) / Booked (yellow); tap one to select it.
+  Widget _dateSlider() {
+    final n = DateTime.now();
+    final today = DateTime(n.year, n.month, n.day);
     return AiraCard(
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              IconButton(
-                onPressed: () => setState(() => _visibleMonth = DateTime(first.year, first.month - 1, 1)),
-                icon: const Icon(Icons.chevron_left_rounded, color: AiraColors.rose),
-              ),
-              Expanded(
-                child: Center(
-                  child: Text('${_months[first.month - 1]} ${first.year}',
-                      style: AiraText.sans(fontSize: 15, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                ),
-              ),
-              IconButton(
-                onPressed: () => setState(() => _visibleMonth = DateTime(first.year, first.month + 1, 1)),
-                icon: const Icon(Icons.chevron_right_rounded, color: AiraColors.rose),
-              ),
-            ],
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 10),
+            child: Text('${_months[_selected.month - 1]} ${_selected.year}',
+                style: AiraText.sans(fontSize: 18, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
           ),
-          Row(
-            children: [
-              for (final d in _dayShort)
-                Expanded(
-                    child: Center(child: Text(d, style: AiraText.sans(fontSize: 11, color: AiraColors.charcoalSoft)))),
-            ],
-          ),
-          const SizedBox(height: 6),
-          GridView.count(
-            crossAxisCount: 7,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            children: [
-              for (var i = 0; i < offset; i++) const SizedBox.shrink(),
-              for (var day = 1; day <= days; day++)
-                Builder(builder: (_) {
-                  final d = DateTime(first.year, first.month, day);
-                  final sel = _sameDay(d, _selected);
-                  return GestureDetector(
-                    onTap: () => setState(() => _select(d)),
-                    child: Container(
-                      margin: const EdgeInsets.all(3),
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        gradient: sel ? AiraGradients.button : null,
-                        shape: BoxShape.circle,
+          SizedBox(
+            height: 88,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _sliderDays,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final d = today.add(Duration(days: i));
+                final sel = _sameDay(d, _selected);
+                final c = _dayColor(d);
+                return GestureDetector(
+                  onTap: () => setState(() => _select(d)),
+                  child: Container(
+                    width: 58,
+                    decoration: BoxDecoration(
+                      color: sel ? AiraColors.roseDeep.withOpacity(0.10) : c?.withOpacity(0.22),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: sel ? AiraColors.roseDeep : (c ?? AiraColors.hair),
+                        width: sel ? 2.4 : 1.4,
                       ),
-                      child: Text('$day',
-                          style: AiraText.sans(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: sel ? Colors.white : AiraColors.roseDeep)),
                     ),
-                  );
-                }),
-            ],
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(_dayShort[d.weekday - 1],
+                            style: AiraText.sans(fontSize: 12, fontWeight: FontWeight.w700, color: AiraColors.charcoalSoft)),
+                        const SizedBox(height: 2),
+                        Text('${d.day}',
+                            style: AiraText.sans(
+                                fontSize: 20,
+                                fontWeight: sel ? FontWeight.w900 : FontWeight.w700,
+                                color: AiraColors.charcoal)),
+                        const SizedBox(height: 2),
+                        Text(_months[d.month - 1].substring(0, 3),
+                            style: AiraText.sans(fontSize: 11, color: AiraColors.charcoalSoft)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
+          const SizedBox(height: 10),
+          Wrap(spacing: 16, runSpacing: 6, children: [
+            _legend(_cOpen, 'Open'),
+            _legend(_cBlocked, 'Blocked'),
+            _legend(_cBooked, 'Booked'),
+          ]),
         ],
       ),
     );
@@ -979,137 +723,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
             const SizedBox(height: 14),
             _segment(),
             const SizedBox(height: 14),
-            _view == 'month' ? _monthGrid() : _weekStrip(),
+            _dateSlider(),
             const SizedBox(height: 16),
             Text('${_dayLong[_dow]}, ${_selected.day} ${_months[_selected.month - 1]}',
-                style: AiraText.serif(fontSize: 20)),
+                style: AiraText.serif(fontSize: 22)),
             const SizedBox(height: 10),
-            if (_view == 'week' || _view == 'month') ..._bookingsSection(),
-            if (_view == 'block') ..._blockSection(),
-            if (_view == 'hours') ...[
-              AiraCard(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                child: Row(
-                  children: [
-                    const SunndariIconBubble(icon: Icons.calendar_today_outlined, size: 40),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Available For Bookings',
-                              style: AiraText.sans(
-                                  fontSize: 14.5, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                          Text('Clients Can Book You On This Day.',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft)),
-                        ],
-                      ),
-                    ),
-                    Switch(
-                      value: _isAvailable,
-                      thumbColor: const WidgetStatePropertyAll(Colors.white),
-                      trackColor: WidgetStateProperty.resolveWith(
-                            (states) => states.contains(WidgetState.selected) ? AiraColors.success : null,
-                      ),
-                      onChanged: (v) {
-                        setState(() => _available[_dow] = v);
-                        if (v && _blocked.contains(_iso(_selected))) _unblockDay();
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              AiraCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Working Hours',
-                        style: AiraText.sans(fontSize: 15, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
-                    const SizedBox(height: 10),
-                    Row(children: [
-                      _timeBox('Start Time', _s, true),
-                      const SizedBox(width: 12),
-                      _timeBox('End Time', _e, false),
-                    ]),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text('Open 24 Hours (12:00 AM – 11:59 PM)',
-                              style: AiraText.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AiraColors.charcoal)),
-                        ),
-                        Switch(
-                          value: _is24h(_s, _e),
-                          onChanged: (v) => setState(() {
-                            _start[_dow] = v ? _open : const TimeOfDay(hour: 9, minute: 0);
-                            _end[_dow] = v ? _close : const TimeOfDay(hour: 18, minute: 0);
-                          }),
-                          thumbColor: const WidgetStatePropertyAll(Colors.white),
-                          trackColor: WidgetStateProperty.resolveWith(
-                                (states) => states.contains(WidgetState.selected) ? AiraColors.success : null,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              AiraCard(
-                onTap: _openWeeklyHours,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                child: Row(
-                  children: [
-                    const SunndariIconBubble(icon: Icons.access_time_rounded, size: 40),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Set Weekly Working Hours',
-                              style: AiraText.sans(
-                                  fontSize: 14.5, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                          Text('Choose Your Working Days And Daily Hours.',
-                              style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft)),
-                        ],
-                      ),
-                    ),
-                    const Icon(Icons.chevron_right_rounded, color: AiraColors.rose),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: AiraColors.blush, borderRadius: BorderRadius.circular(14)),
-                child: Row(
-                  children: [
-                    const Icon(Icons.auto_awesome, color: AiraColors.rose),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Time Protected Automatically',
-                              style: AiraText.sans(
-                                  fontSize: 14, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                          Text('Service Duration And Travel Buffers Prevent Overlapping Bookings.',
-                              style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft, height: 1.35)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              PrimaryButton(
-                label: _saving ? 'Saving…' : 'Save Availability',
-                expand: true,
-                onTap: _saving ? null : _save,
-              ),
+            if (_view == 'month') ..._bookingsSection(),
+            if (_view == 'day') ...[
+              ..._daySection(),
+              ..._bookingsSection(),
             ],
           ],
         ),

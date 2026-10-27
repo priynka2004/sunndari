@@ -7,7 +7,7 @@ import '../utils/app_feedback.dart';
 import '../widgets/common.dart';
 import 'reschedule_review_screen.dart';
 import 'reschedule_confirmed_screen.dart';
-import '../widgets/sunndari_time_picker.dart';
+import '../widgets/available_slots_picker.dart';
 
 /// Reschedule Request.
 class RescheduleRequest {
@@ -28,6 +28,7 @@ class ChangeBookingScreen extends StatefulWidget {
   final String timeLabel;
   final String venueLabel;
   final VoidCallback? onCancelBooking;
+  final int? durationMinutes; // booking length, so the slots match it
 
   const ChangeBookingScreen({
     super.key,
@@ -39,6 +40,7 @@ class ChangeBookingScreen extends StatefulWidget {
     required this.timeLabel,
     required this.venueLabel,
     this.onCancelBooking,
+    this.durationMinutes,
   });
 
   @override
@@ -57,7 +59,8 @@ class _ChangeBookingScreenState extends State<ChangeBookingScreen> {
   ];
 
   bool _reschedule = true;
-  DateTime? _date;
+  // The booking's original date stays fixed; only the time slot can change.
+  late final DateTime _date = DateTime(widget.currentStart.year, widget.currentStart.month, widget.currentStart.day);
   TimeOfDay? _time;
   String? _reason;
   final _note = TextEditingController();
@@ -71,35 +74,16 @@ class _ChangeBookingScreenState extends State<ChangeBookingScreen> {
 
   /// UI piece: themed.
   Widget _themed(BuildContext context, Widget? child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: Theme.of(context).colorScheme.copyWith(
-                primary: AiraColors.rose,
-                onPrimary: Colors.white,
-                surface: AiraColors.card,
-                onSurface: AiraColors.charcoal,
-              ),
-        ),
-        child: child!,
-      );
-
-  /// Lets the user pick date.
-  Future<void> _pickDate() async {
-    final now = DateTime.now();
-    final d = await showDatePicker(
-      context: context,
-      initialDate: _date ?? now.add(const Duration(days: 1)),
-      firstDate: now,
-      lastDate: now.add(const Duration(days: 365)),
-      builder: _themed,
-    );
-    if (d != null) setState(() => _date = d);
-  }
-
-  /// Lets the user pick time.
-  Future<void> _pickTime() async {
-    final t = await pickSunndariTime(context, initial: _time, helpText: 'Select New Time');
-    if (t != null) setState(() => _time = t);
-  }
+    data: Theme.of(context).copyWith(
+      colorScheme: Theme.of(context).colorScheme.copyWith(
+        primary: AiraColors.rose,
+        onPrimary: Colors.white,
+        surface: AiraColors.card,
+        onSurface: AiraColors.charcoal,
+      ),
+    ),
+    child: child!,
+  );
 
   /// Lets the user pick reason.
   Future<void> _pickReason() async {
@@ -136,11 +120,11 @@ class _ChangeBookingScreenState extends State<ChangeBookingScreen> {
 
   /// Submits the form.
   Future<void> _submit() async {
-    if (_date == null || _time == null || _reason == null) {
-      AppFeedback.showInfo(context, 'Pick A New Date, Time And Reason First');
+    if (_time == null || _reason == null) {
+      AppFeedback.showInfo(context, 'Pick An Available Time Slot And A Reason First');
       return;
     }
-    final newStart = DateTime(_date!.year, _date!.month, _date!.day, _time!.hour, _time!.minute);
+    final newStart = DateTime(_date.year, _date.month, _date.day, _time!.hour, _time!.minute);
     if (!newStart.isAfter(DateTime.now())) {
       AppFeedback.showInfo(context, 'Choose A Time In The Future');
       return;
@@ -176,7 +160,7 @@ class _ChangeBookingScreenState extends State<ChangeBookingScreen> {
       ),
     ));
     if (!mounted) return;
-    Navigator.of(context).pop(RescheduleRequest(date: _date!, time: _time!, reason: _reason!, note: note));
+    Navigator.of(context).pop(RescheduleRequest(date: _date, time: _time!, reason: _reason!, note: note));
   }
 
   /// Builds the UI.
@@ -233,89 +217,117 @@ class _ChangeBookingScreenState extends State<ChangeBookingScreen> {
 
   /// UI piece: summary.
   Widget _summary() => AiraCard(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    padding: const EdgeInsets.all(14),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Booking Summary', style: AiraText.serif(fontSize: 17)),
+        const SizedBox(height: 10),
+        Row(
           children: [
-            Text('Booking Summary', style: AiraText.serif(fontSize: 17)),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Container(
-                  width: 78,
-                  height: 88,
-                  decoration: BoxDecoration(
-                    gradient: AiraGradients.avatarOrb,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.face_retouching_natural, size: 32, color: Colors.white),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(widget.serviceName, style: AiraText.sans(fontSize: 15, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                      const SizedBox(height: 4),
-                      _meta(Icons.calendar_today_outlined, widget.dateLabel),
-                      _meta(Icons.schedule_rounded, widget.timeLabel),
-                      _meta(Icons.location_on_outlined, widget.venueLabel),
-                    ],
-                  ),
-                ),
-              ],
+            Container(
+              width: 78,
+              height: 88,
+              decoration: BoxDecoration(
+                gradient: AiraGradients.avatarOrb,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.face_retouching_natural, size: 32, color: Colors.white),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.serviceName, style: AiraText.sans(fontSize: 15, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
+                  const SizedBox(height: 4),
+                  _meta(Icons.calendar_today_outlined, widget.dateLabel),
+                  _meta(Icons.schedule_rounded, widget.timeLabel),
+                  _meta(Icons.location_on_outlined, widget.venueLabel),
+                ],
+              ),
             ),
           ],
         ),
-      );
+      ],
+    ),
+  );
 
   /// UI piece: meta.
   Widget _meta(IconData i, String t) => Padding(
-        padding: const EdgeInsets.only(top: 3),
-        child: Row(
-          children: [
-            Icon(i, size: 14, color: AiraColors.rose),
-            const SizedBox(width: 6),
-            Expanded(child: Text(t, style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft))),
-          ],
-        ),
-      );
+    padding: const EdgeInsets.only(top: 3),
+    child: Row(
+      children: [
+        Icon(i, size: 14, color: AiraColors.rose),
+        const SizedBox(width: 6),
+        Expanded(child: Text(t, style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft))),
+      ],
+    ),
+  );
 
   /// UI piece: seg.
   Widget _seg(String label, IconData icon, bool on, VoidCallback onTap) => Expanded(
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            decoration: BoxDecoration(
-              color: on ? AiraColors.roseDeep : Colors.transparent,
-              borderRadius: BorderRadius.circular(11),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, size: 18, color: on ? Colors.white : AiraColors.roseDeep),
-                const SizedBox(width: 8),
-                Text(label,
-                    style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w700, color: on ? Colors.white : AiraColors.roseDeep)),
-              ],
-            ),
-          ),
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: on ? AiraColors.roseDeep : Colors.transparent,
+          borderRadius: BorderRadius.circular(11),
         ),
-      );
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: on ? Colors.white : AiraColors.roseDeep),
+            const SizedBox(width: 8),
+            Text(label,
+                style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w700, color: on ? Colors.white : AiraColors.roseDeep)),
+          ],
+        ),
+      ),
+    ),
+  );
 
   /// Reschedule form.
   List<Widget> _rescheduleForm() {
-    final dateText = _date == null ? 'Select Date' : '${_date!.day} ${_months[_date!.month - 1]} ${_date!.year}';
-    final timeText = _time == null ? 'Select Available Time' : _time!.format(context);
+    final dateText = '${_date.day} ${_months[_date.month - 1]} ${_date.year}';
     return [
       AiraCard(
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _selectField('New Date', Icons.calendar_today_outlined, dateText, _date != null, _pickDate),
-            _selectField('New Time', Icons.schedule_rounded, timeText, _time != null, _pickTime),
+            Text('Booking Date', style: AiraText.sans(fontSize: 14.5, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+              decoration: BoxDecoration(
+                color: AiraColors.blush,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AiraColors.pinkBorder, width: 1.1),
+              ),
+              child: Row(children: [
+                const Icon(Icons.calendar_today_outlined, size: 18, color: AiraColors.rose),
+                const SizedBox(width: 10),
+                Expanded(child: Text(dateText, style: AiraText.sans(fontSize: 15, fontWeight: FontWeight.w700, color: AiraColors.charcoal))),
+                const Icon(Icons.lock_outline_rounded, size: 17, color: AiraColors.charcoalSoft),
+              ]),
+            ),
+            const SizedBox(height: 4),
+            Text('The Booking Date Stays The Same. Choose A New Time Slot.',
+                style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft)),
+            const SizedBox(height: 14),
+            Text('Available Time Slots', style: AiraText.sans(fontSize: 14.5, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
+            const SizedBox(height: 8),
+            AvailableSlotsPicker(
+              date: _date,
+              excludeBookingId: widget.bookingId,
+              durationMinutes: widget.durationMinutes,
+              originalStart: TimeOfDay(hour: widget.currentStart.hour, minute: widget.currentStart.minute),
+              selected: _time,
+              onSelected: (t) => setState(() => _time = t),
+            ),
+            const SizedBox(height: 16),
             _selectField('Reason For Reschedule', Icons.edit_note_rounded, _reason ?? 'Select A Reason', _reason != null, _pickReason),
             Text('Additional Note (Optional)',
                 style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
@@ -395,74 +407,74 @@ class _ChangeBookingScreenState extends State<ChangeBookingScreen> {
 
   /// UI: checks.
   Widget _check(IconData i, String t, {bool last = false}) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 9),
-        decoration: BoxDecoration(border: last ? null : const Border(bottom: BorderSide(color: AiraColors.hair))),
-        child: Row(
-          children: [
-            SunndariIconBubble(icon: i, size: 34),
-            const SizedBox(width: 10),
-            Expanded(child: Text(t, style: AiraText.sans(fontSize: 13, color: AiraColors.charcoal))),
-          ],
-        ),
-      );
+    padding: const EdgeInsets.symmetric(vertical: 9),
+    decoration: BoxDecoration(border: last ? null : const Border(bottom: BorderSide(color: AiraColors.hair))),
+    child: Row(
+      children: [
+        SunndariIconBubble(icon: i, size: 34),
+        const SizedBox(width: 10),
+        Expanded(child: Text(t, style: AiraText.sans(fontSize: 13, color: AiraColors.charcoal))),
+      ],
+    ),
+  );
 
   /// UI: selects field.
   Widget _selectField(String label, IconData icon, String value, bool filled, VoidCallback onTap) => Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
-            const SizedBox(height: 8),
-            GestureDetector(
-              onTap: onTap,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-                decoration: BoxDecoration(
-                  color: AiraColors.pinkFill,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AiraColors.pinkBorder, width: 1.1),
-                ),
-                child: Row(
-                  children: [
-                    Icon(icon, size: 18, color: AiraColors.rose),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(value,
-                          style: AiraText.sans(fontSize: 14, color: filled ? AiraColors.charcoal : AiraColors.charcoalSoft.withOpacity(0.8))),
-                    ),
-                    const Icon(Icons.keyboard_arrow_down_rounded, color: AiraColors.rose),
-                  ],
-                ),
-              ),
+    padding: const EdgeInsets.only(bottom: 14),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+            decoration: BoxDecoration(
+              color: AiraColors.pinkFill,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AiraColors.pinkBorder, width: 1.1),
             ),
-          ],
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: AiraColors.rose),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(value,
+                      style: AiraText.sans(fontSize: 14, color: filled ? AiraColors.charcoal : AiraColors.charcoalSoft.withOpacity(0.8))),
+                ),
+                const Icon(Icons.keyboard_arrow_down_rounded, color: AiraColors.rose),
+              ],
+            ),
+          ),
         ),
-      );
+      ],
+    ),
+  );
 
   /// UI piece: cancel card.
   Widget _cancelCard() => AiraCard(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Cancel This Booking?', style: AiraText.serif(fontSize: 18)),
-            const SizedBox(height: 6),
-            Text(
-              'The Client Is Told Right Away, With The Reason You Give. Applicable Cancellation Charges Are Calculated Before Submission.',
-              style: AiraText.sans(fontSize: 13, color: AiraColors.charcoalSoft, height: 1.4),
-            ),
-            const SizedBox(height: 14),
-            GhostButton(
-              label: 'Cancel Booking',
-              icon: Icons.close_rounded,
-              expand: true,
-              color: AiraColors.errorText,
-              onTap: widget.onCancelBooking == null
-                  ? () => AppFeedback.showInfo(context, 'Cancellation Is Available From The Booking List')
-                  : widget.onCancelBooking,
-            ),
-          ],
+    padding: const EdgeInsets.all(16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Cancel This Booking?', style: AiraText.serif(fontSize: 18)),
+        const SizedBox(height: 6),
+        Text(
+          'The Client Is Told Right Away, With The Reason You Give. Applicable Cancellation Charges Are Calculated Before Submission.',
+          style: AiraText.sans(fontSize: 13, color: AiraColors.charcoalSoft, height: 1.4),
         ),
-      );
+        const SizedBox(height: 14),
+        GhostButton(
+          label: 'Cancel Booking',
+          icon: Icons.close_rounded,
+          expand: true,
+          color: AiraColors.errorText,
+          onTap: widget.onCancelBooking == null
+              ? () => AppFeedback.showInfo(context, 'Cancellation Is Available From The Booking List')
+              : widget.onCancelBooking,
+        ),
+      ],
+    ),
+  );
 }

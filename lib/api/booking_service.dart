@@ -56,7 +56,8 @@ class BookingService {
       ApiEndpoints.artistBookingsGetAll,
       queryParameters: {
         'page_num': pageNum.toString(),
-        'limit': limit.toString(),
+        // The server rejects limit > 200 with a 400 "Validation Error", so never send more than that.
+        'limit': limit.clamp(1, 200).toString(),
         if (filterKey != null && filterValue != null) ...{
           'filter_key': filterKey,
           'filter_value': filterValue,

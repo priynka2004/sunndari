@@ -435,10 +435,24 @@ class _PackagesScreenState extends State<PackagesScreen> {
   }
 }
 
+/// Add Service page opened from the admin's "add this special service" notification
+/// (service name, makeup types, price, additional services and photos — the normal Add Service form).
+class AddServiceFromNotificationScreen extends StatelessWidget {
+  final int? subCategoryId;
+  final String? serviceName;
+  const AddServiceFromNotificationScreen({super.key, this.subCategoryId, this.serviceName});
+
+  @override
+  Widget build(BuildContext context) =>
+      _AddServiceScreen(presetSubCategoryId: subCategoryId, presetServiceName: serviceName);
+}
+
 /// Add Service page — re-uses the onboarding Services & Pricing step as-is.
 class _AddServiceScreen extends StatefulWidget {
   final Package? editing; // null → add a new service, otherwise edit this package
-  const _AddServiceScreen({this.editing});
+  final int? presetSubCategoryId; // opened from the "add this special service" notification
+  final String? presetServiceName;
+  const _AddServiceScreen({this.editing, this.presetSubCategoryId, this.presetServiceName});
 
   @override
   State<_AddServiceScreen> createState() => _AddServiceScreenState();
@@ -470,7 +484,13 @@ class _AddServiceScreenState extends State<_AddServiceScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
                 child: SunndariFlowBar(title: widget.editing != null ? 'Edit Service' : 'Add Service', onBack: () => Navigator.of(context).pop()),
               ),
-              Expanded(child: ServicesPricingStep(key: _stepKey, editing: widget.editing, standalone: true)),
+              Expanded(child: ServicesPricingStep(
+                key: _stepKey,
+                editing: widget.editing,
+                standalone: true,
+                presetSubCategoryId: widget.presetSubCategoryId,
+                presetServiceName: widget.presetServiceName,
+              )),
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
                 child: PrimaryButton(

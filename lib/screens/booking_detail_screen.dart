@@ -421,6 +421,18 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     child: Text(text, style: AiraText.sans(fontSize: 11.5, fontWeight: FontWeight.w700, color: fg)),
   );
 
+  /// Booking length in minutes (end − start), or null if unknown.
+  int? _bookingMinutes(Booking? b) {
+    int? m(String? v) {
+      final p = v?.split(':');
+      if (p == null || p.length < 2) return null;
+      final h = int.tryParse(p[0]), mi = int.tryParse(p[1]);
+      return h == null || mi == null ? null : h * 60 + mi;
+    }
+    final st = m(b?.startTime), en = m(b?.endTime);
+    return (st != null && en != null && en > st) ? en - st : null;
+  }
+
   /// Opens change.
   Future<bool> _openChange({bool viaHelp = false}) async {
     if (_reschedulePending) {
@@ -439,6 +451,7 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
         bookingId: widget.bookingId,
         clientName: _clientName,
         currentStart: _rescheduleApplied ? _reschedule!.newStart : currentStart,
+        durationMinutes: _bookingMinutes(b),
         serviceName: _packageLabel,
         dateLabel: b != null ? _formatDate(b.bookingDate) : (widget.slot?.date ?? '—'),
         timeLabel: _timeLabel,
@@ -1083,7 +1096,9 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
           _rowItem(Icons.person_outline_rounded, 'Client', _clientName),
           _rowItem(Icons.event_outlined, 'Date & Time', '$_dateText • $_timeLabel'),
           _rowItem(Icons.location_on_outlined, 'Venue', _locationType?.name ?? '—',
-              sub: 'Exact Address Shared After Confirmation', last: true),
+              sub: 'Exact Address Shared After Confirmation', last: (b?.notes ?? '').trim().isEmpty),
+          if ((b?.notes ?? '').trim().isNotEmpty)
+            _rowItem(Icons.edit_note_rounded, 'Special Request / Additional Information', b!.notes!.trim(), last: true),
         ]),
         const SizedBox(height: 12),
         _card([
@@ -1202,7 +1217,10 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
               ),
               const SizedBox(height: 6),
               _rowItem(Icons.event_outlined, 'Date & Time', '$_dateText • $_timeLabel'),
-              _rowItem(Icons.location_on_outlined, 'Client Venue', _locationLabel ?? '—', last: true),
+              _rowItem(Icons.location_on_outlined, 'Client Venue', _locationLabel ?? '—',
+                  last: (b?.notes ?? '').trim().isEmpty),
+              if ((b?.notes ?? '').trim().isNotEmpty)
+                _rowItem(Icons.edit_note_rounded, 'Special Request / Additional Information', b!.notes!.trim(), last: true),
               const SizedBox(height: 10),
               Row(
                 children: [

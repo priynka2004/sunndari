@@ -19,6 +19,8 @@ class AppNotification {
   final DateTime createdAt;
   final DateTime updatedAt;
   final String? firestoreDocId;
+  /// Only for "add this special service" notifications: the service (sub-category) the admin opened.
+  final int? subCategoryId;
 
   AppNotification({
     required this.notificationId,
@@ -35,7 +37,11 @@ class AppNotification {
     required this.createdAt,
     required this.updatedAt,
     this.firestoreDocId,
+    this.subCategoryId,
   });
+
+  /// True for the admin's "add this special service" notification (Diwali Special, New Year Special…).
+  bool get isAddServicePrompt => isAddServiceNotificationType(type);
 
   /// Builds this object from API JSON.
   factory AppNotification.fromJson(Map<String, dynamic> json) {
@@ -65,12 +71,13 @@ class AppNotification {
       return DateTime.tryParse(v.toString());
     }
 
+    final typeStr = pick(['type', 'notificationType', 'notification_type'])?.toString() ?? 'general';
     return AppNotification(
       notificationId:
           parseInt(pick(['notificationId', 'notification_id', 'id'])) ?? 0,
       userId: parseInt(pick(['userId', 'user_id'])) ?? 0,
       bookingId: parseInt(pick(['bookingId', 'booking_id'])),
-      type: pick(['type', 'notificationType', 'notification_type'])?.toString() ?? 'general',
+      type: typeStr,
       title: pick(['title'])?.toString() ?? '',
       message: pick(['message', 'body'])?.toString() ?? '',
       isRead: parseBool(pick(['isRead', 'is_read'])),
@@ -85,6 +92,9 @@ class AppNotification {
           parseDate(pick(['createdAt', 'created_at'])) ?? DateTime.now(),
       updatedAt:
           parseDate(pick(['updatedAt', 'updated_at'])) ?? DateTime.now(),
+      // "service_activated": referenceId IS the service (sub-category) id.
+      subCategoryId: parseInt(pick(['subCategoryId', 'sub_category_id'])) ??
+          (isAddServiceNotificationType(typeStr) ? parseInt(pick(['referenceId', 'reference_id'])) : null),
     );
   }
 
@@ -110,11 +120,12 @@ class AppNotification {
       return DateTime.now();
     }
 
+    final typeStr = pick(['type'])?.toString() ?? 'general';
     return AppNotification(
       notificationId: parseInt(pick(['notification_id', 'notificationId', 'id'])) ?? 0,
       userId: parseInt(pick(['user_id', 'userId'])) ?? 0,
       bookingId: parseInt(pick(['booking_id', 'bookingId'])),
-      type: pick(['type'])?.toString() ?? 'general',
+      type: typeStr,
       title: pick(['title'])?.toString() ?? 'No Title',
       message: pick(['body', 'message'])?.toString() ?? '',
       isRead: data['isRead'] == true || data['is_read'] == true,
@@ -125,6 +136,8 @@ class AppNotification {
       createdAt: parseCreatedAt(pick(['createdAt', 'created_at'])),
       updatedAt: parseCreatedAt(pick(['createdAt', 'created_at'])),
       firestoreDocId: docId,
+      subCategoryId: parseInt(pick(['subCategoryId', 'sub_category_id'])) ??
+          (isAddServiceNotificationType(typeStr) ? parseInt(pick(['referenceId', 'reference_id'])) : null),
     );
   }
 
@@ -144,5 +157,14 @@ class AppNotification {
         createdAt: createdAt,
         updatedAt: updatedAt,
         firestoreDocId: firestoreDocId,
+        subCategoryId: subCategoryId,
       );
+}
+
+/// Notification `type` values that mean "admin announced a new service — add it to your list".
+/// The backend sends `service_activated` (referenceId = the service id); the older names are kept as aliases.
+/// ONLY these open the Add Service screen; every other notification keeps its old navigation.
+bool isAddServiceNotificationType(String type) {
+  final t = type.trim().toLowerCase();
+  return t == 'service_activated' || t == 'special_service' || t == 'add_service' || t == 'special_service_prompt';
 }

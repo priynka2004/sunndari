@@ -7,6 +7,7 @@ import '../theme/tokens.dart';
 import '../utils/app_feedback.dart';
 import '../utils/notification_badge.dart';
 import '../screens/notifications_screen.dart';
+import '../screens/messages_screen.dart';
 
 /// Aira Card widget.
 class AiraCard extends StatelessWidget {
@@ -501,33 +502,48 @@ class SunndariBell extends StatelessWidget {
   const SunndariBell({super.key, this.onTap, this.unread = 0});
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap ??
-            // Navigates to NotificationsScreen
-            () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NotificationsScreen())),
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: ValueListenableBuilder<bool>(
-            valueListenable: NotificationBadge.instance.hasUnread,
-            builder: (_, hasUnread, __) => Stack(
-              clipBehavior: Clip.none,
-              children: [
-                const Icon(Icons.notifications_none_rounded, size: 30, color: AiraColors.roseDeep),
-                if (unread > 0 || hasUnread)
-                  Positioned(
-                    right: -1,
-                    top: -1,
-                    child: Container(
-                      width: 9,
-                      height: 9,
-                      decoration: const BoxDecoration(color: AiraColors.rose, shape: BoxShape.circle),
-                    ),
-                  ),
-              ],
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Messages — opens the list of customers; tap a customer to open the chat
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            // Navigates to MessagesScreen
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MessagesScreen())),
+            child: const Padding(
+              padding: EdgeInsets.all(8),
+              child: Icon(Icons.chat_bubble_outline_rounded, size: 28, color: AiraColors.roseDeep),
             ),
           ),
-        ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap ??
+                // Navigates to NotificationsScreen
+                () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NotificationsScreen())),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: ValueListenableBuilder<bool>(
+                valueListenable: NotificationBadge.instance.hasUnread,
+                builder: (_, hasUnread, __) => Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    const Icon(Icons.notifications_none_rounded, size: 30, color: AiraColors.roseDeep),
+                    if (unread > 0 || hasUnread)
+                      Positioned(
+                        right: -1,
+                        top: -1,
+                        child: Container(
+                          width: 9,
+                          height: 9,
+                          decoration: const BoxDecoration(color: AiraColors.rose, shape: BoxShape.circle),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
       );
 }
 

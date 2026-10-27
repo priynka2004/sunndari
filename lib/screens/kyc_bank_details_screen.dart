@@ -391,7 +391,7 @@ class _KycBankDetailsScreenState extends State<KycBankDetailsScreen> {
       context: context,
       builder: (_) => Dialog(
         backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.all(16),
+        insetPadding: const EdgeInsets.all(8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -402,9 +402,12 @@ class _KycBankDetailsScreenState extends State<KycBankDetailsScreen> {
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: InteractiveViewer(child: _kycImage(title, url, fit: BoxFit.contain)),
+            // Flexible: a tall ID photo shrinks to the space left instead of overflowing the dialog.
+            Flexible(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: InteractiveViewer(child: _kycImage(title, url, fit: BoxFit.contain)),
+              ),
             ),
             const SizedBox(height: 8),
             Text(title, style: AiraText.sans(fontSize: 13, color: Colors.white)),

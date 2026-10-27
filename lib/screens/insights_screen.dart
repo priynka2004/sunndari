@@ -63,7 +63,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
     });
     try {
       // API call: bookingService.getAllBookings → GET /artists/bookings/get_all/
-      final bookings = await ServiceLocator.bookingService.getAllBookings(limit: 300);
+      final bookings = await ServiceLocator.bookingService.getAllBookings(limit: 200);
 
       List<StatusItem> statuses = [];
       try {

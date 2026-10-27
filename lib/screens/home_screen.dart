@@ -27,6 +27,7 @@ class HomeScreen extends StatefulWidget {
   final VoidCallback? onCompleteProfile;
   final String? profileHint;
   final List<BookingSlot> todaysBookings; // New parameter for today's schedule
+  final bool acceptingBookings; // current Accept Booking switch value from the profile
 
   const HomeScreen({
     super.key,
@@ -43,6 +44,7 @@ class HomeScreen extends StatefulWidget {
     this.onCompleteProfile,
     this.profileHint,
     this.todaysBookings = const [], // Default to empty list
+    this.acceptingBookings = true,
   });
 
   @override
@@ -51,6 +53,75 @@ class HomeScreen extends StatefulWidget {
 
 /// State of [HomeScreen] — holds the screen data and logic.
 class _HomeScreenState extends State<HomeScreen> {
+  late bool _accepting = widget.acceptingBookings;
+
+  @override
+  void didUpdateWidget(covariant HomeScreen old) {
+    super.didUpdateWidget(old);
+    if (old.acceptingBookings != widget.acceptingBookings) _accepting = widget.acceptingBookings;
+  }
+
+  /// Turns new bookings on / off (same switch as Profile).
+  /// API: artistBusiness.setAcceptingBookings → PUT /artists/profile/accepting_bookings/
+  Future<void> _toggleAccepting(bool v) async {
+    final before = _accepting;
+    setState(() => _accepting = v);
+    try {
+      await ServiceLocator.artistBusiness.setAcceptingBookings(v);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _accepting = before);
+        AppFeedback.showError(context, e);
+      }
+    }
+  }
+
+  /// UI piece: Accept Booking toggle card.
+  Widget _acceptToggle() => Padding(
+    padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+    child: AiraCard(
+      padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+      child: SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        activeColor: AiraColors.rose,
+        title: Text('Accepting New Bookings',
+            style: AiraText.sans(fontSize: 15, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
+        subtitle: Text(
+          _accepting ? 'Clients Can Find And Book You.' : 'Hidden From Search. Existing Bookings Are Not Affected.',
+          style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft),
+        ),
+        value: _accepting,
+        onChanged: _toggleAccepting,
+      ),
+    ),
+  );
+
+  /// Status pill for a Today's Schedule row.
+  /// Same Missed rule as the Bookings screen (so both always agree):
+  /// - Pending request: Missed once the appointment time has passed.
+  /// - Confirmed, service never started (no OTP start): Missed once time (+2h grace to tap "On my way") has passed.
+  /// - Service started (In Progress) but never completed after the day is over: needs Customer Care.
+  /// - Completed / Cancelled / No-show: shown as they are.
+  (String, Color, Color) _statusPill(BookingSlot s) {
+    const green = Color(0xFFE3F5EA);
+    final start = s.startDateTime;
+    final pendingPassed = s.status == SlotStatus.pending &&
+        (s.isPastDate || (start != null && !DateTime.now().isBefore(start)));
+    final confirmedMissed = s.status == SlotStatus.confirmed && s.isMissed;
+
+    if (pendingPassed || confirmedMissed) return ('Missed', AiraColors.errorBg, AiraColors.errorText);
+    if (s.status == SlotStatus.inProgress && s.isPastDate) {
+      return ('Needs Support', AiraColors.errorBg, AiraColors.errorText);
+    }
+    return switch (s.status) {
+      SlotStatus.confirmed => ('Confirmed', green, AiraColors.success),
+      SlotStatus.inProgress => ('In Progress', green, AiraColors.success),
+      SlotStatus.completed => ('Completed', green, AiraColors.success),
+      SlotStatus.noShow => ('No Show', AiraColors.pinkFill, AiraColors.roseDeep),
+      SlotStatus.cancelled => ('Cancelled', AiraColors.pinkFill, AiraColors.roseDeep),
+      _ => ('Pending', AiraColors.pinkFill, AiraColors.roseDeep),
+    };
+  }
 
   /// UI piece: section title.
   Widget _sectionTitle(String text, {Widget? trailing}) => Padding(
@@ -171,6 +242,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
+          _acceptToggle(),
+
           // ==========================================
           // 2. Today’s Schedule (Moved Up & Detailed UI added)
           // ==========================================
@@ -214,14 +287,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             const SizedBox(height: 4),
                             // Small Status Pill (shows the REAL status, not just Confirmed/Pending)
                             Builder(builder: (_) {
-                              final (label, bg, fg) = switch (slot.status) {
-                                SlotStatus.confirmed => ('Confirmed', const Color(0xFFE3F5EA), AiraColors.success),
-                                SlotStatus.inProgress => ('In Progress', const Color(0xFFE3F5EA), AiraColors.success),
-                                SlotStatus.completed => ('Completed', const Color(0xFFE3F5EA), AiraColors.success),
-                                SlotStatus.noShow => ('No Show', AiraColors.pinkFill, AiraColors.roseDeep),
-                                SlotStatus.cancelled => ('Cancelled', AiraColors.pinkFill, AiraColors.roseDeep),
-                                _ => ('Pending', AiraColors.pinkFill, AiraColors.roseDeep),
-                              };
+                              final (label, bg, fg) = _statusPill(slot);
                               return Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                                 decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),

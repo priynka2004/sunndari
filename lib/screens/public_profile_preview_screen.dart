@@ -46,6 +46,7 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
   ArtistProfile? _profile;
   List<Package> _packages = [];
   List<Portfolio> _photos = [];
+  Map<int, String> _subNames = {}; // service (sub-category) id → name, used as the photo category label
   List<AddOn> _addOns = [];
   Map<int, String> _servicePhotos = {};
   ServiceLocationPrefs _loc = const ServiceLocationPrefs();
@@ -83,7 +84,14 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
         // API call: artistService.getAllPortfolios → GET /artists/portfolio/get_all/
         final r = await ServiceLocator.artistService.getAllPortfolios(limit: 50);
         final order = await ArtistPageLocal.portfolioOrder();
-        _photos = ArtistPageLocal.applyOrder<Portfolio>(r.data.where((p) => p.isActive && !p.isWorkSample).toList(), order, (p) => p.portfolioId);
+        // Work samples (photos added during onboarding) are part of the public portfolio too — hiding them made
+        // an artist with 6 photos see only 1 here.
+        _photos = ArtistPageLocal.applyOrder<Portfolio>(r.data.where((p) => p.isActive).toList(), order, (p) => p.portfolioId);
+      } catch (_) {}
+      try {
+        // API call: coreService.getAllServiceSubCategories → GET /core/service-sub-category/get_all/ (photo category names)
+        final r = await ServiceLocator.coreService.getAllServiceSubCategories(limit: 100);
+        _subNames = {for (final s in r.data) s.subCategoryId: s.name.trim()};
       } catch (_) {}
       try {
         // API call: artistService.getAllSchedules → GET /artists/availability/schedule/get_all/
@@ -313,6 +321,28 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating, backgroundColor: AiraColors.roseDeep));
 
+
+  /// Small category label drawn over the bottom of a photo.
+  Widget _catLabel(String text) => Positioned(
+        left: 0,
+        right: 0,
+        bottom: 0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          color: Colors.black45,
+          child: Text(text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AiraText.sans(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white)),
+        ),
+      );
+
+  /// Category of a photo: the service name, else its caption, else empty.
+  String _photoCategory(Portfolio p) {
+    final n = (_subNames[p.subCategoryId] ?? '').trim();
+    return n.isNotEmpty ? n : (p.caption ?? '').trim();
+  }
+
   /// Opens photo.
   void _viewPhoto(Portfolio p) {
     showDialog(
@@ -323,6 +353,17 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
         child: Stack(
           children: [
             ClipRRect(borderRadius: BorderRadius.circular(16), child: InteractiveViewer(child: _netImage(p.fileUrl, fit: BoxFit.contain))),
+            if (_photoCategory(p).isNotEmpty)
+              Positioned(
+                left: 10,
+                bottom: 10,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
+                  child: Text(_photoCategory(p),
+                      style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w600, color: Colors.white)),
+                ),
+              ),
             Positioned(
               right: 6,
               top: 6,
@@ -657,7 +698,16 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
           Expanded(
             child: GestureDetector(
               onTap: () => _viewPhoto(first[i]),
-              child: AspectRatio(aspectRatio: 0.85, child: ClipRRect(borderRadius: BorderRadius.circular(12), child: _netImage(first[i].fileUrl))),
+              child: AspectRatio(
+                aspectRatio: 0.85,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Stack(fit: StackFit.expand, children: [
+                    _netImage(first[i].fileUrl),
+                    if (_photoCategory(first[i]).isNotEmpty) _catLabel(_photoCategory(first[i])),
+                  ]),
+                ),
+              ),
             ),
           ),
           if (i != first.length - 1) const SizedBox(width: 8),
@@ -711,7 +761,13 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
           for (final p in _photos)
             GestureDetector(
               onTap: () => _viewPhoto(p),
-              child: ClipRRect(borderRadius: BorderRadius.circular(12), child: _netImage(p.fileUrl)),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Stack(fit: StackFit.expand, children: [
+                  _netImage(p.fileUrl),
+                  if (_photoCategory(p).isNotEmpty) _catLabel(_photoCategory(p)),
+                ]),
+              ),
             ),
         ],
       ),

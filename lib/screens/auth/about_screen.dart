@@ -72,10 +72,18 @@ class AboutScreen extends StatelessWidget {
                           'Manage Bookings And Grow Your Professional Presence.',
                           last: true),
                       const SizedBox(height: 30),
-                      Text(
-                        'Your Talent. Your Business. Your Sunndari.',
-                        textAlign: TextAlign.center,
-                        style: AiraText.serif(fontSize: 15.5, fontWeight: FontWeight.w500, color: AiraColors.roseDeep),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        decoration: BoxDecoration(
+                          gradient: AiraGradients.button,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Text(
+                          'Your Talent. Your Business. Your Sunndari.',
+                          textAlign: TextAlign.center,
+                          style: AiraText.serif(fontSize: 16.5, fontWeight: FontWeight.w800, color: Colors.white),
+                        ),
                       ),
                     ],
                   ),

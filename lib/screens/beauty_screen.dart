@@ -7,6 +7,7 @@
 //   GET /artists/portfolio/get_all/
 //   GET /artists/profile/share_link/   (when sharing)
 
+import 'package:aira_app/utils/share_profile.dart';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import '../theme/tokens.dart';
@@ -289,8 +290,7 @@ class _BeautyScreenState extends State<BeautyScreen> {
                   icon: Icons.ios_share_rounded,
                   small: true,
                   expand: true,
-                  onTap: (_selected == null || _sharing) ? null : _shareLook,
-                ),
+                  onTap: () => shareArtistProfile(context),                ),
               ],
             ),
           ),

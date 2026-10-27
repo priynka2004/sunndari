@@ -41,6 +41,60 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
   bool _loading = true;
   String? _error;
   List<SupportTicket> _tickets = [];
+  String _sort = 'newest'; // newest | oldest | open
+
+  DateTime? _when(SupportTicket t) => t.createdAt == null ? null : DateTime.tryParse(t.createdAt!);
+
+  String _date(SupportTicket t) {
+    final d = _when(t)?.toLocal();
+    if (d == null) return '';
+    const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${d.day} ${m[d.month - 1]} ${d.year}';
+  }
+
+  /// Tickets in the order chosen by the sort chips (newest first by default).
+  List<SupportTicket> get _sorted {
+    final list = [..._tickets];
+    int byNew(SupportTicket a, SupportTicket b) {
+      final x = _when(a), y = _when(b);
+      if (x != null && y != null) {
+        final c = y.compareTo(x);
+        if (c != 0) return c;
+      }
+      return b.ticketId.compareTo(a.ticketId);
+    }
+    switch (_sort) {
+      case 'oldest':
+        list.sort((a, b) => byNew(b, a));
+      case 'open':
+        list.sort((a, b) {
+          if (a.isClosed != b.isClosed) return a.isClosed ? 1 : -1;
+          return byNew(a, b);
+        });
+      default:
+        list.sort(byNew);
+    }
+    return list;
+  }
+
+  Widget _sortChips() => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        child: Wrap(spacing: 8, children: [
+          for (final e in {'newest': 'Newest', 'oldest': 'Oldest', 'open': 'Open First'}.entries)
+            ChoiceChip(
+              label: Text(e.value,
+                  style: AiraText.sans(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _sort == e.key ? Colors.white : AiraColors.roseDeep)),
+              selected: _sort == e.key,
+              selectedColor: AiraColors.roseDeep,
+              backgroundColor: AiraColors.pinkFill,
+              showCheckmark: false,
+              onSelected: (_) => setState(() => _sort = e.key),
+            ),
+        ]),
+      );
 
   @override
   void initState() {
@@ -102,6 +156,7 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
                 child: SunndariPageHeading(title: 'Support Tickets', subtitle: 'Track Your Requests To The Sunndari Team.'),
               ),
+              if (!_loading && _error == null && _tickets.length > 1) _sortChips(),
               Expanded(
                 child: _loading
                     ? const Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: AiraColors.rose))
@@ -113,9 +168,9 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
                                 onRefresh: _load,
                                 child: ListView.builder(
                                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 90),
-                                  itemCount: _tickets.length,
+                                  itemCount: _sorted.length,
                                   itemBuilder: (_, i) {
-                                    final t = _tickets[i];
+                                    final t = _sorted[i];
                                     return Padding(
                                       padding: const EdgeInsets.only(bottom: 10),
                                       child: InkWell(
@@ -130,13 +185,16 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
                                           child: Row(children: [
                                             Expanded(
                                               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                                Text(t.subject,
-                                                    maxLines: 1,
+                                                Text('#${t.ticketId}${_date(t).isEmpty ? '' : '  •  ${_date(t)}'}',
+                                                    style: AiraText.sans(fontSize: 12, fontWeight: FontWeight.w600, color: AiraColors.rose)),
+                                                const SizedBox(height: 3),
+                                                Text(t.subject.trim().isEmpty ? '(No Subject)' : t.subject,
+                                                    maxLines: 2,
                                                     overflow: TextOverflow.ellipsis,
-                                                    style: AiraText.sans(fontSize: 14.5, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
+                                                    style: AiraText.sans(fontSize: 15.5, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
                                                 const SizedBox(height: 3),
                                                 Text(_issueTypes[t.issueType] ?? t.issueType,
-                                                    style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft)),
+                                                    style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft)),
                                               ]),
                                             ),
                                             Text(t.status.replaceAll('_', ' '),

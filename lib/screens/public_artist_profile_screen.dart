@@ -59,7 +59,11 @@ class _PubPackage {
 class _PubPhoto {
   final String fileUrl;
   final String? caption;
-  const _PubPhoto(this.fileUrl, this.caption);
+  final String? category; // service / category name when the API sends one
+  const _PubPhoto(this.fileUrl, this.caption, [this.category]);
+
+  /// Label shown on the photo: category name, else caption.
+  String get label => ((category ?? '').trim().isNotEmpty ? category! : (caption ?? '')).trim();
 }
 
 /// SCREEN: Public Artist Profile (opened from a shared link).
@@ -135,14 +139,18 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
       _photos = ((d['portfolio'] as List?) ?? const [])
           .whereType<Map>()
           .where((e) => (e['mediaType'] ?? 'image') == 'image' && e['fileUrl'] != null)
-          .map((e) => _PubPhoto('${e['fileUrl']}', e['caption']?.toString()))
+          .map((e) => _PubPhoto(
+                '${e['fileUrl']}',
+                e['caption']?.toString(),
+                (e['subCategoryName'] ?? e['serviceName'] ?? e['categoryName'])?.toString(),
+              ))
           .toList();
 
       // Optional fields (only if the backend adds them later).
       final venue = d['serviceMode'] ?? d['workLocation'] ?? d['venueLabel'];
       _venueLabel = venue == null ? null : '$venue';
       final travel = d['travelCharge'] ?? d['travelCharges'];
-      _travelLabel = travel == null ? null : (double.tryParse('$travel') == 0 ? 'Free' : (double.tryParse('$travel') != null ? '₹${double.parse('$travel').toStringAsFixed(0)} per visit' : '$travel'));
+      _travelLabel = travel == null ? null : (double.tryParse('$travel') == 0 ? 'Free' : (double.tryParse('$travel') != null ? '₹${double.parse('$travel').toStringAsFixed(0)} ${'${d['travelChargeType'] ?? ''}'.toLowerCase().contains('km') ? 'per km' : 'per visit'}' : '$travel'));
       final days = d['workingDays'];
       if (days is List) {
         _workingDays = days.map((e) => e is num ? _dayNames[e.toInt().clamp(0, 6)] : '$e').toList();
@@ -562,6 +570,21 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
     );
   }
 
+  /// Small category label drawn over the bottom of a photo.
+  Widget _catLabel(String text) => Positioned(
+        left: 0,
+        right: 0,
+        bottom: 0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          color: Colors.black45,
+          child: Text(text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AiraText.sans(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white)),
+        ),
+      );
+
   Widget _photoRow() {
     if (_photos.isEmpty) {
       return Padding(
@@ -576,7 +599,16 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
           Expanded(
             child: GestureDetector(
               onTap: () => _viewPhoto(first[i]),
-              child: AspectRatio(aspectRatio: 0.85, child: ClipRRect(borderRadius: BorderRadius.circular(12), child: _netImage(first[i].fileUrl))),
+              child: AspectRatio(
+                aspectRatio: 0.85,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Stack(fit: StackFit.expand, children: [
+                    _netImage(first[i].fileUrl),
+                    if (first[i].label.isNotEmpty) _catLabel(first[i].label),
+                  ]),
+                ),
+              ),
             ),
           ),
           if (i != first.length - 1) const SizedBox(width: 8),
@@ -629,7 +661,13 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
           for (final p in _photos)
             GestureDetector(
               onTap: () => _viewPhoto(p),
-              child: ClipRRect(borderRadius: BorderRadius.circular(12), child: _netImage(p.fileUrl)),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Stack(fit: StackFit.expand, children: [
+                  _netImage(p.fileUrl),
+                  if (p.label.isNotEmpty) _catLabel(p.label),
+                ]),
+              ),
             ),
         ],
       ),

@@ -12,6 +12,7 @@ import '../utils/app_session.dart';
 import '../utils/service_locator.dart';
 import '../utils/notification_badge.dart';
 import 'notification_detail_screen.dart';
+import 'packages_screen.dart' show AddServiceFromNotificationScreen;
 
 /// SCREEN: Notifications list (API + Firestore), mark read / mark all read.
 class NotificationsScreen extends StatefulWidget {
@@ -161,6 +162,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   /// Opens detail.
   Future<void> _openDetail(AppNotification n) async {
     _markRead(n);
+    // Admin's "add this special service" notification → straight to the Add Service screen.
+    if (n.isAddServicePrompt) {
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => AddServiceFromNotificationScreen(subCategoryId: n.subCategoryId)),
+      );
+      return;
+    }
     // Navigates to NotificationDetailScreen
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => NotificationDetailScreen(notificationId: n.notificationId, notification: n)),
@@ -204,6 +212,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   /// Icon for.
   IconData _iconFor(AppNotification n) {
     final t = n.type.toLowerCase();
+    if (n.isAddServicePrompt) return Icons.auto_awesome_outlined; // "New service: …" announcement
     if (t.contains('chat')) return Icons.chat_bubble_outline_rounded;
     if (t.contains('otp')) return Icons.pin_outlined;
     if (t.contains('reschedule')) return Icons.event_repeat_outlined;

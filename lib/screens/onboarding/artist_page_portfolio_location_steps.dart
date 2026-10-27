@@ -48,6 +48,10 @@ import '../../widgets/sunndari_sheets.dart';
 import 'artist_page_services_steps.dart' show ArtistPageStep;
 import '../../widgets/sunndari_time_picker.dart';
 
+/// Backend currently rejects `per_km` ("Per-kilometre travel charges are not available yet; use free or per_visit").
+/// Set to true once /artists/service_areas/add/ and /update/ accept per_km.
+const bool _kPerKmAvailable = false;
+
 /// UI piece: heading.
 Widget _heading(String title, String subtitle, {double size = 32}) => Padding(
   padding: const EdgeInsets.only(bottom: 18),
@@ -662,7 +666,7 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
       _areas.addAll(prefs.areas);
       _travelFree = prefs.travelFree;
       if (prefs.travelAmount > 0) _amount.text = prefs.travelAmount.toStringAsFixed(0);
-      _unit = 'Per visit'; // per-km is not supported by the API
+      _unit = prefs.travelUnit == 'Per km' ? 'Per km' : 'Per visit';
       try {
         // API call: artistService.getProfile → GET /artists/profile/get/
         final prof = await ServiceLocator.artistService.getProfile();
@@ -688,7 +692,10 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
           _areas
             ..clear()
             ..addAll(active.map((a) => a.city));
-          _travelFree = active.first.travelChargeType != 'per_visit';
+          final type = active.first.travelChargeType;
+          _travelFree = type != 'per_visit' && type != 'per_km';
+          if (type == 'per_km') _unit = 'Per km';
+          if (type == 'per_visit') _unit = 'Per visit';
           debugPrint('[LocationStep] loaded service area: ${active.first.city} ${active.first.travelChargeType} ${active.first.travelCharge}');
           if (!_travelFree && active.first.travelCharge > 0) {
             _amount.text = active.first.travelCharge.toStringAsFixed(0);
@@ -718,6 +725,7 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
         }
       } catch (_) {}
     } catch (_) {}
+    if (!_kPerKmAvailable) _unit = 'Per visit'; // an old saved "Per km" is shown / saved as "Per visit"
     if (mounted) setState(() => _loading = false);
   }
 
@@ -931,7 +939,7 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
 
       // Service areas: make the server list match the cities picked here.
       final biz = ServiceLocator.artistBusiness;
-      final chargeType = _travelFree ? 'free' : 'per_visit';
+      final chargeType = _travelFree ? 'free' : (_unit == 'Per km' ? 'per_km' : 'per_visit');
       final amount = _travelFree ? 0.0 : (double.tryParse(_amount.text.trim()) ?? 0);
       final wanted = _areas.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
       // API call: artistBusiness.getServiceAreas → GET /artists/service_areas/get_all/
@@ -939,12 +947,20 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
       final byCity = {for (final a in existingAreas) a.city.toLowerCase(): a};
       for (final c in wanted) {
         final ex = byCity[c.toLowerCase()];
-        if (ex == null) {
-          // API call: artistBusiness.addServiceArea → POST /artists/service_areas/add/
-          await biz.addServiceArea(city: c, travelChargeType: chargeType, travelCharge: amount);
-        } else if (ex.travelChargeType != chargeType || ex.travelCharge != amount) {
-          // API call: artistBusiness.updateServiceArea → PUT /artists/service_areas/update/
-          await biz.updateServiceArea(ex.serviceAreaId, travelChargeType: chargeType, travelCharge: amount);
+        try {
+          if (ex == null) {
+            // API call: artistBusiness.addServiceArea → POST /artists/service_areas/add/
+            await biz.addServiceArea(city: c, travelChargeType: chargeType, travelCharge: amount);
+          } else if (ex.travelChargeType != chargeType || ex.travelCharge != amount) {
+            // API call: artistBusiness.updateServiceArea → PUT /artists/service_areas/update/
+            await biz.updateServiceArea(ex.serviceAreaId, travelChargeType: chargeType, travelCharge: amount);
+          }
+        } catch (_) {
+          // The server may not accept "Per km" yet — say so clearly instead of a confusing error.
+          if (chargeType == 'per_km') {
+            throw Exception('Per km Travel Charge Could Not Be Saved Right Now. Please Choose "Per visit" Or Try Again Later.');
+          }
+          rethrow;
         }
       }
       final keep = wanted.map((e) => e.toLowerCase()).toSet();
@@ -1181,7 +1197,7 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
                   value: _unit,
                   onTap: () async {
                     final v = await showSunndariChoiceSheet(context,
-                        title: 'Charge Type', subtitle: 'Travel Is Charged Once Per Visit.', options: const ['Per visit'], selected: _unit, boxed: true);
+                        title: 'Charge Type', subtitle: 'Choose How Your Travel Is Charged.', options: _kPerKmAvailable ? const ['Per visit', 'Per km'] : const ['Per visit'], selected: _unit, boxed: true);
                     if (v != null) setState(() => _unit = v);
                   },
                 ),

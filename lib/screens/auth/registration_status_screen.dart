@@ -19,6 +19,7 @@ import '../../widgets/common.dart';
 import '../onboarding/onboarding_flow_screen.dart';
 import '../onboarding/artist_page_setup_screen.dart';
 import '../help_center_screen.dart';
+import '../edit_profile_screen.dart';
 import 'login_screen.dart';
 
 /// SCREEN: Registration Status — shows pending / approved / rejected / suspended review state after onboarding.
@@ -143,6 +144,43 @@ class _RegistrationStatusScreenState extends State<RegistrationStatusScreen> {
     if (!mounted) return;
     setState(() => _loading = true);
     await _load();
+  }
+
+  bool _resubmitting = false;
+
+  /// Rejected artist: opens the profile edit screen so the rejected details can be corrected.
+  /// API: artistService.getProfile → GET /artists/profile/get/ (then EditProfileScreen saves the changes)
+  Future<void> _updateProfile() async {
+    try {
+      final profile = await ServiceLocator.artistService.getProfile();
+      if (!mounted) return;
+      // Navigates to EditProfileScreen
+      final updated = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => EditProfileScreen(profile: profile)),
+      );
+      if (updated == true && mounted) {
+        AppFeedback.showSuccess(context, 'Profile Updated ✓ Now Resubmit For Review');
+      }
+    } catch (e) {
+      if (mounted) AppFeedback.showError(context, e, onRetry: _updateProfile);
+    }
+  }
+
+  /// Sends the corrected profile back to admin for approval.
+  /// API: artistBusiness.submitOnboarding → POST /artists/onboarding/submit/
+  Future<void> _resubmit() async {
+    setState(() => _resubmitting = true);
+    try {
+      await ServiceLocator.artistBusiness.submitOnboarding();
+      if (!mounted) return;
+      AppFeedback.showSuccess(context, 'Sent For Review ✓ We’ll Notify You Once It Is Checked.');
+      setState(() => _loading = true);
+      await _load();
+    } catch (e) {
+      if (mounted) AppFeedback.showError(context, e, onRetry: _resubmit);
+    } finally {
+      if (mounted) setState(() => _resubmitting = false);
+    }
   }
 
   /// Logs the user out.
@@ -455,7 +493,19 @@ class _RegistrationStatusScreenState extends State<RegistrationStatusScreen> {
         ],
         bottom: Column(
           children: [
-            PrimaryButton(label: 'Update My Details', arrow: true, expand: true, onTap: _openOnboarding),
+            PrimaryButton(label: 'Update My Profile', icon: Icons.edit_outlined, expand: true, onTap: _updateProfile),
+            const SizedBox(height: 10),
+            GhostButton(
+              label: _resubmitting ? 'Sending…' : 'Resubmit For Review',
+              icon: Icons.send_rounded,
+              expand: true,
+              onTap: _resubmitting ? null : _resubmit,
+            ),
+            TextButton(
+              onPressed: _openOnboarding,
+              child: Text('Edit Other Onboarding Details',
+                  style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w600, color: AiraColors.roseDeep)),
+            ),
             _logoutLink(),
           ],
         ),

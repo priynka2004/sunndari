@@ -16,6 +16,7 @@ import 'booking_detail_screen.dart';
 import 'business_details_screen.dart';
 import 'changes_required_screen.dart';
 import 'help_center_screen.dart';
+import 'packages_screen.dart' show AddServiceFromNotificationScreen;
 import '../utils/app_feedback.dart';
 
 /// SCREEN: Notification Detail — opened from the list or from a push-notification tap.
@@ -226,6 +227,19 @@ class _NotificationDetailScreenState extends State<NotificationDetailScreen> {
                                               bookingId: _item!.bookingId!,
                                               title: _item!.title.trim().isNotEmpty ? _item!.title.trim() : 'Chat',
                                             ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                    if (_item!.isAddServicePrompt) ...[
+                                      const SizedBox(height: 20),
+                                      PrimaryButton(
+                                        label: 'Add This Service',
+                                        icon: Icons.add_rounded,
+                                        expand: true,
+                                        onTap: () => Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                            builder: (_) => AddServiceFromNotificationScreen(subCategoryId: _item!.subCategoryId),
                                           ),
                                         ),
                                       ),

@@ -275,13 +275,14 @@ class ArtistBusinessService {
 
   // ───────────────────────── Service areas & travel charge ─────────────────────────
 
-  /// API: POST /artists/service_areas/add/ — travel_charge_type `free` or `per_visit` (+ charge_amount);
-  /// `per_km` is rejected. Once an area is active, Home Visits are only accepted for addresses in your areas.
+  /// API: POST /artists/service_areas/add/ — travel_charge_type `free`, `per_visit` or `per_km` (+ charge_amount).
+  /// NOTE: the backend used to reject `per_km`; the app now sends it again, so the backend must accept it.
+  /// Once an area is active, Home Visits are only accepted for addresses in your areas.
   Future<void> addServiceArea({required String city, String travelChargeType = 'free', double? travelCharge}) async {
     await _api.post(ApiEndpoints.artistsServiceAreasAdd, data: {
       'city': city,
       'travel_charge_type': travelChargeType,
-      if (travelChargeType == 'per_visit') 'charge_amount': (travelCharge ?? 0).toStringAsFixed(2),
+      if (travelChargeType == 'per_visit' || travelChargeType == 'per_km') 'charge_amount': (travelCharge ?? 0).toStringAsFixed(2),
     });
   }
 
