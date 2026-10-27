@@ -32,7 +32,7 @@ const String kDeepLinkScheme = 'sunndari';
 const String kDeepLinkHost = 'app';
 
 /// Hosted redirect page (index.html on GitHub Pages, repo sunndari).
-const String kProfileOpenPageUrl = 'https://priynka2004.github.io/sunndari/';
+const String kProfileOpenPageUrl = 'https://sunndari.com/';
 
 const String _kLastHandledLink = 'deep_link_last_handled';
 const String _kReferrerChecked = 'install_referrer_checked';
