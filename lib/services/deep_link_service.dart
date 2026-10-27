@@ -8,13 +8,19 @@
 // once Splash has opened the first screen (markReady) -> PublicArtistProfileScreen(slug) is pushed on top.
 // That screen calls GET /public/artists/get/?slug=... (no login needed).
 //
+// Fresh install from a shared link: the page sends the user to Play Store with referrer "slug=<slug>".
+// On the FIRST launch after install, the app reads it once (Play Install Referrer, MainActivity.kt)
+// and opens the same profile. Already-installed apps get the sunndari:// link directly instead.
+//
 // Why "last handled link" is saved: Android gives the app the SAME old link again when it is
 // reopened from Recent Apps / relaunched. Without this check, a normal app open would show the profile.
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../screens/public_artist_profile_screen.dart';
@@ -25,13 +31,14 @@ import '../utils/service_locator.dart';
 const String kDeepLinkScheme = 'sunndari';
 const String kDeepLinkHost = 'app';
 
-/// Hosted redirect page (docs/index.html on GitHub Pages, repo aira, folder /docs).
-//const String kProfileOpenPageUrl = 'https://priynka2004.github.io/aira/';
-
+/// Hosted redirect page (index.html on GitHub Pages, repo sunndari).
 const String kProfileOpenPageUrl = 'https://priynka2004.github.io/sunndari/';
 
-
 const String _kLastHandledLink = 'deep_link_last_handled';
+const String _kReferrerChecked = 'install_referrer_checked';
+
+/// Native channel in android/app/src/main/kotlin/com/aira/sunndari/MainActivity.kt
+const MethodChannel _referrerChannel = MethodChannel('sunndari/install_referrer');
 
 class DeepLinkService {
   DeepLinkService._();
@@ -44,7 +51,7 @@ class DeepLinkService {
   String? _lastHandled; // loaded from SharedPreferences in init()
 
   /// Builds the https link that is shared (WhatsApp, Telegram, SMS, Instagram, anywhere).
-  /// Example: https://priynka2004.github.io/aira/?slug=priya-sheoran-e4c2de
+  /// Example: https://priynka2004.github.io/sunndari/?slug=priya-sheoran-e4c2de
   static String profileShareUrl(String slug) {
     final base = kProfileOpenPageUrl.endsWith('/') ? kProfileOpenPageUrl : '$kProfileOpenPageUrl/';
     return '$base?slug=${Uri.encodeQueryComponent(slug)}';
@@ -79,10 +86,36 @@ class DeepLinkService {
   /// Call once in main() before runApp.
   /// (app_links' uriLinkStream also gives the launch link, so getInitialLink is not called separately.)
   Future<void> init() async {
+    SharedPreferences? prefs;
     try {
-      _lastHandled = (await SharedPreferences.getInstance()).getString(_kLastHandledLink);
+      prefs = await SharedPreferences.getInstance();
+      _lastHandled = prefs.getString(_kLastHandledLink);
     } catch (_) {}
     _sub ??= _appLinks.uriLinkStream.listen(_handle, onError: (e) => debugPrint('DeepLink stream error = $e'));
+    if (prefs != null) unawaited(_checkInstallReferrer(prefs));
+  }
+
+  /// Runs ONCE per install: if the app was installed from a shared profile link,
+  /// Play Store gives back "slug=<slug>" -> open that profile.
+  Future<void> _checkInstallReferrer(SharedPreferences prefs) async {
+    if (!Platform.isAndroid) return;
+    if (prefs.getBool(_kReferrerChecked) == true) return;
+    await prefs.setBool(_kReferrerChecked, true);
+    try {
+      final ref = await _referrerChannel.invokeMethod<String>('get').timeout(const Duration(seconds: 8));
+      debugPrint('Install referrer = $ref');
+      if (ref == null || ref.trim().isEmpty) return;
+      final slug = (Uri.splitQueryString(ref.trim())['slug'] ?? '').trim();
+      if (slug.isEmpty) return; // normal Play Store install (no shared link)
+      _handle(Uri(
+        scheme: kDeepLinkScheme,
+        host: kDeepLinkHost,
+        path: '/profile',
+        queryParameters: {'slug': slug, 'src': 'install'},
+      ));
+    } catch (e) {
+      debugPrint('Install referrer error = $e');
+    }
   }
 
   /// Call after Splash has opened the first screen (Login or the app). The public profile needs no login.

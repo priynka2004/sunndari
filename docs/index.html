@@ -19,23 +19,27 @@
   </style>
 </head>
 <body>
-  <div class="box">
-    <h2>Opening Sunndari…</h2>
-    <a id="open" class="btn" href="#">Open Profile In App</a>
-    <p class="small">If the app does not open, tap the button above.<br>
-      Inside WhatsApp: ⋮ menu → "Open in browser", then tap the button.</p>
-  </div>
-  <script>
-    var slug = new URLSearchParams(location.search).get('slug') || '';
-    var pkg = 'com.aira.sunndari';
-    // t = tap time, so the app can tell a NEW tap from Android re-sending an old link.
-    var path = 'app/profile' + (slug ? '?slug=' + encodeURIComponent(slug) + '&t=' + Date.now() : '');
-    var isAndroid = /android/i.test(navigator.userAgent);
-    var url = isAndroid
-      ? 'intent://' + path + '#Intent;scheme=sunndari;package=' + pkg + ';end'
-      : 'sunndari://' + path;
-    document.getElementById('open').href = url;
-    window.location.href = url;
-  </script>
+<div class="box">
+  <h2>Opening Sunndari…</h2>
+  <a id="open" class="btn" href="#">Open Profile In App</a>
+  <p class="small">If the app does not open, tap the button above.<br>
+    Inside WhatsApp: ⋮ menu → "Open in browser", then tap the button.</p>
+</div>
+<script>
+  var slug = new URLSearchParams(location.search).get('slug') || '';
+  var pkg = 'com.aira.sunndari';
+  // t = tap time, so the app can tell a NEW tap from Android re-sending an old link.
+  var path = 'app/profile' + (slug ? '?slug=' + encodeURIComponent(slug) + '&t=' + Date.now() : '');
+  var isAndroid = /android/i.test(navigator.userAgent);
+  // App not installed -> Play Store. The slug goes along as "referrer", so after install
+  // the app reads it (Play Install Referrer) and opens this same profile on first launch.
+  var store = 'https://play.google.com/store/apps/details?id=' + pkg
+    + (slug ? '&referrer=' + encodeURIComponent('slug=' + slug) : '');
+  var url = isAndroid
+    ? 'intent://' + path + '#Intent;scheme=sunndari;package=' + pkg + ';S.browser_fallback_url=' + encodeURIComponent(store) + ';end'
+    : 'sunndari://' + path;
+  document.getElementById('open').href = url;
+  window.location.href = url;
+</script>
 </body>
 </html>
