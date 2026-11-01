@@ -3,7 +3,9 @@
 
 /// All backend endpoint paths.
 class ApiEndpoints {
-  static const String baseUrl = 'https://sundari.checkour.work';
+//  static const String baseUrl = 'https://sundari.checkour.work';
+
+  static const String baseUrl = 'https://app.sunndari.com';
 
   // Public (no login): artist page by slug -> ?slug=<publicSlug>
   static const String publicArtistGet = '/public/artists/get/';

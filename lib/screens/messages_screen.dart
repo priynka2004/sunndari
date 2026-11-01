@@ -7,6 +7,7 @@
 //   GET /chat/messages/get_all/        (per booking: does the customer have messages?)
 //   GET user profile                   (customer name)
 
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import '../models/booking/booking.dart';
 import '../models/chat/chat_message.dart';
@@ -34,6 +35,13 @@ class _Thread {
   });
 }
 
+/// Result of checking one booking's chat.
+class _CheckResult {
+  final _Thread? thread;
+  final bool failed; // the chat could not be checked (network / server problem)
+  const _CheckResult({this.thread, this.failed = false});
+}
+
 /// SCREEN: Messages list (one row per customer who has messaged).
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -46,6 +54,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
   bool _loading = true;
   String? _error;
   List<_Thread> _threads = [];
+  int _failed = 0; // chats that could not be checked on the last load
 
   @override
   void initState() {
@@ -55,21 +64,31 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
   /// For every booking, checks its chat. A customer is listed only if they sent at least one message.
   /// API: bookingService.getAllBookings, chatService.getMessages, userService.getProfile
+  ///
+  /// Scope (no time limit — only these size limits): the artist's newest 200 paid bookings are read, the newest 60
+  /// of them with a customer are checked (8 at a time so a slow server does not time everything out), and the
+  /// last 20 messages of each chat are looked at. Unpaid bookings are hidden by the server, so their chats are not here.
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = null;
+      _failed = 0;
     });
     try {
-      final bookings = await ServiceLocator.bookingService.getAllBookings(limit: 100);
-      // Newest bookings first; cap the number of chats we check.
+      final bookings = await ServiceLocator.bookingService.getAllBookings(limit: 200);
+      // Newest bookings first.
       final sorted = [...bookings]..sort((a, b) => '${b.bookingDate} ${b.startTime}'.compareTo('${a.bookingDate} ${a.startTime}'));
-      final toCheck = sorted.where((b) => b.customerId != 0).take(40).toList();
+      final toCheck = sorted.where((b) => b.customerId != 0).take(60).toList();
 
-      final found = await Future.wait(toCheck.map(_check));
+      final results = <_CheckResult>[];
+      for (var i = 0; i < toCheck.length; i += 8) {
+        results.addAll(await Future.wait(toCheck.skip(i).take(8).map(_check)));
+      }
+      final failed = results.where((r) => r.failed).length;
+
       // Keep the booking with the newest customer message per customer.
       final best = <int, _Thread>{};
-      for (final t in found.whereType<_Thread>()) {
+      for (final t in results.map((r) => r.thread).whereType<_Thread>()) {
         final cur = best[t.customerId];
         if (cur == null || t.lastAt.compareTo(cur.lastAt) > 0) best[t.customerId] = t;
       }
@@ -82,9 +101,14 @@ class _MessagesScreenState extends State<MessagesScreen> {
       }));
 
       final list = best.values.toList()..sort((a, b) => b.lastAt.compareTo(a.lastAt));
+      if (kDebugMode) {
+        debugPrint('[Messages] paid bookings=${bookings.length}, chats checked=${toCheck.length}, '
+            'customers with messages=${list.length}, chats that could not be checked=$failed');
+      }
       if (!mounted) return;
       setState(() {
         _threads = list;
+        _failed = failed;
         _loading = false;
       });
     } catch (_) {
@@ -97,25 +121,30 @@ class _MessagesScreenState extends State<MessagesScreen> {
     }
   }
 
-  /// Returns a thread if this booking's chat has a message sent by the customer, else null.
-  Future<_Thread?> _check(Booking b) async {
+  /// Checks one booking's chat. "Conversation not found" just means this booking has no chat (normal);
+  /// any other problem (network, server) is reported as [failed] instead of silently looking like "no messages".
+  Future<_CheckResult> _check(Booking b) async {
     try {
       final res = await ServiceLocator.chatService.getMessages(b.bookingId, limit: 20, sortOrder: 'desc');
       final msgs = res.data;
-      if (msgs.isEmpty) return null;
+      if (msgs.isEmpty) return const _CheckResult();
       final fromCustomer = msgs.where((m) => m.senderId == b.customerId).toList();
-      if (fromCustomer.isEmpty) return null; // artist wrote, customer never replied
+      if (fromCustomer.isEmpty) return const _CheckResult(); // artist wrote, customer never replied
       final ChatMessage last = msgs.first; // sort_order desc → newest first
-      return _Thread(
-        customerId: b.customerId,
-        bookingId: b.bookingId,
-        bookingDate: b.bookingDate,
-        lastText: last.content,
-        lastAt: last.createdAt,
-        lastFromCustomer: last.senderId == b.customerId,
+      return _CheckResult(
+        thread: _Thread(
+          customerId: b.customerId,
+          bookingId: b.bookingId,
+          bookingDate: b.bookingDate,
+          lastText: last.content,
+          lastAt: last.createdAt,
+          lastFromCustomer: last.senderId == b.customerId,
+        ),
       );
-    } catch (_) {
-      return null; // "Conversation not found" → no chat on this booking
+    } catch (e) {
+      final m = e.toString().toLowerCase();
+      if (m.contains('conversation not found') || m.contains('not found')) return const _CheckResult();
+      return const _CheckResult(failed: true);
     }
   }
 
@@ -149,13 +178,21 @@ class _MessagesScreenState extends State<MessagesScreen> {
                   const SizedBox(height: 10),
                 ]),
               ),
+              if (!_loading && _error == null && _failed > 0 && _threads.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: Text('Some chats could not be loaded. Pull down to refresh.',
+                      style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w600, color: AiraColors.charcoalSoft)),
+                ),
               Expanded(
                 child: _loading
                     ? const Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: AiraColors.rose))
                     : _error != null
                     ? _empty(_error!, retry: true)
                     : _threads.isEmpty
-                    ? _empty('No Messages Yet. Customers Who Message You Will Appear Here.')
+                    ? (_failed > 0
+                        ? _empty('Could Not Load Some Chats. Please Check Your Internet And Retry.', retry: true)
+                        : _empty('No Messages Yet. Customers Who Message You Will Appear Here.'))
                     : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView.separated(

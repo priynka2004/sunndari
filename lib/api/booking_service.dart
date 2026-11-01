@@ -73,6 +73,32 @@ class BookingService {
     return bookings;
   }
 
+  /// ALL bookings, page after page (the server returns at most 200 per page), so totals such as
+  /// "Total Bookings" and "Earnings" always cover the artist's whole history.
+  /// API: GET /artists/bookings/get_all/ (page_num 1, 2, 3 … until totalPage). Stops after [maxPages] pages.
+  Future<List<Booking>> getAllBookingsEveryPage({String paymentFilter = 'paid', int maxPages = 10}) async {
+    final all = <Booking>[];
+    var page = 1;
+    while (page <= maxPages) {
+      final response = await _apiService.get(
+        ApiEndpoints.artistBookingsGetAll,
+        queryParameters: {
+          'page_num': page.toString(),
+          'limit': '200',
+          'filter_key': 'paymentStatus',
+          'filter_value': paymentFilter,
+        },
+      );
+      final json = jsonDecode(response.body);
+      all.addAll(_parseBookingList(json));
+      final d = json is Map ? json['data'] : null;
+      final totalPage = d is Map && d['totalPage'] is num ? (d['totalPage'] as num).toInt() : 1;
+      if (page >= totalPage) break;
+      page++;
+    }
+    return all;
+  }
+
   /// Updates booking status.
   /// API: PUT /artists/bookings/update_status/
   Future<Booking> updateBookingStatus(

@@ -266,7 +266,7 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
     try {
       final results = await Future.wait([
         ServiceLocator.artistService.getProfile(),
-        ServiceLocator.bookingService.getAllBookings(limit: 200),
+        ServiceLocator.bookingService.getAllBookingsEveryPage(),
       ]);
       final profile = results[0] as ArtistProfile;
       // The server returns PAID bookings only (filter_key=paymentStatus&filter_value=paid).
@@ -581,6 +581,11 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
     final todays = stats.todaysAppointments;
     final pendingConfirmationsCount =
         _bookings.where((b) => _mapStatus(b.statusId, cancelledBy: b.cancelledBy) == SlotStatus.pending).length;
+    // Home "Business Overview": ALL THREE numbers use the same scope = this month
+    // (Earnings is the same figure as Earnings tab → This Month → Net Earnings).
+    final monthBookings = stats.thisMonthAppointments;
+    final grossMonth = BookingStats(monthBookings, _bookingStatuses).totalEarnings;
+    final netMonth = grossMonth - (grossMonth * (_profile?.commissionRate ?? 0) / 100);
 
     late final Widget mainScreen;
     switch (_screen) {
@@ -654,6 +659,9 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
           loading: _loading,
           bookingsThisMonth: stats.thisMonthAppointments.length,
           expectedEarningsToday: todays.fold<double>(0, (s, b) => s + b.totalAmount),
+          monthBookings: monthBookings.length,
+          monthEarnings: netMonth,
+          monthUpcoming: stats.upcomingThisMonth.length,
           pendingConfirmations: pendingConfirmationsCount,
           avgRating: _profile?.avgRating ?? 0,
           showCompleteProfileBanner: !_loading && _profileIncomplete,

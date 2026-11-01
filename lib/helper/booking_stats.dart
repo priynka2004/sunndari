@@ -151,6 +151,40 @@ class BookingStats {
     }).toList();
   }
 
+  /// Total bookings of all time (cancelled / no-show are not counted — same rule as earnings).
+  int get totalBookingsCount => bookings.where((b) => !_isCancelled(b)).length;
+
+  /// Start date + time of a booking (falls back to midnight when the time cannot be read).
+  DateTime? _startOf(Booking b) {
+    final d = _dateOf(b);
+    if (d == null) return null;
+    final p = b.startTime.split(':');
+    final h = int.tryParse(p.isNotEmpty ? p[0] : '') ?? 0;
+    final m = int.tryParse(p.length > 1 ? p[1] : '') ?? 0;
+    return DateTime(d.year, d.month, d.day, h, m);
+  }
+
+  /// Upcoming = confirmed bookings that have not started yet (new requests are counted separately).
+  List<Booking> get upcomingBookings {
+    final now = DateTime.now();
+    return bookings.where((b) {
+      if (_isCancelled(b)) return false;
+      if ((b.cancelledBy ?? '').isNotEmpty) return false;
+      if (statusLabel(b.statusId) != 'confirmed') return false;
+      final s = _startOf(b);
+      return s != null && !s.isBefore(now);
+    }).toList();
+  }
+
+  /// Upcoming bookings that fall in the current month (so Bookings / Earnings / Upcoming share one scope).
+  List<Booking> get upcomingThisMonth {
+    final now = DateTime.now();
+    return upcomingBookings.where((b) {
+      final d = _dateOf(b);
+      return d != null && d.year == now.year && d.month == now.month;
+    }).toList();
+  }
+
   /// Last n weeks totals.
   List<double> lastNWeeksTotals(int weeks) {
     final currentWeekStart = _startOfWeek;

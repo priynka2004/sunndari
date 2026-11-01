@@ -19,6 +19,10 @@ class HomeScreen extends StatefulWidget {
   final String dateLabel;
   final int bookingsThisMonth;
   final double expectedEarningsToday;
+  // Business Overview — all three use THIS MONTH only, so they always agree with each other.
+  final int monthBookings; // bookings this month (cancelled not counted)
+  final double monthEarnings; // NET earnings this month (gross − platform fee), same as Earnings → This Month
+  final int monthUpcoming; // confirmed bookings this month that have not started yet
   final int pendingConfirmations;
   final double avgRating;
   final String briefingText;
@@ -36,6 +40,9 @@ class HomeScreen extends StatefulWidget {
     this.dateLabel = '',
     this.bookingsThisMonth = 0,
     this.expectedEarningsToday = 0,
+    this.monthBookings = 0,
+    this.monthEarnings = 0,
+    this.monthUpcoming = 0,
     this.pendingConfirmations = 0,
     this.avgRating = 0,
     this.briefingText = '',
@@ -95,6 +102,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     ),
   );
+
+  static const _monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  String _monthName(int m) => _monthNames[(m - 1).clamp(0, 11)];
 
   /// Status pill for a Today's Schedule row.
   /// Same Missed rule as the Bookings screen (so both always agree):
@@ -343,16 +356,16 @@ class _HomeScreenState extends State<HomeScreen> {
           // 4. Business Overview (Moved Down)
           // ==========================================
           if (showNumbers) ...[
-            _sectionTitle('Business Overview'),
+            _sectionTitle('Business Overview · ${_monthName(DateTime.now().month)}'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  _statTile(Icons.calendar_month_outlined, 'Total Bookings', '${widget.bookingsThisMonth}'),
+                  _statTile(Icons.calendar_month_outlined, 'Bookings', '${widget.monthBookings}'),
                   const SizedBox(width: 10),
-                  _statTile(Icons.currency_rupee_rounded, 'Earnings', '₹${widget.expectedEarningsToday.toStringAsFixed(0)}'),
+                  _statTile(Icons.currency_rupee_rounded, 'Earnings', '₹${widget.monthEarnings.toStringAsFixed(0)}'),
                   const SizedBox(width: 10),
-                  _statTile(Icons.access_time_rounded, 'Upcoming', '${widget.pendingConfirmations}'),
+                  _statTile(Icons.access_time_rounded, 'Upcoming', '${widget.monthUpcoming}'),
                 ],
               ),
             ),
