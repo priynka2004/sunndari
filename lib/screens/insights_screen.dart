@@ -41,6 +41,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
   String? _error;
   List<Booking> _bookings = [];
   List<StatusItem> _statuses = [];
+  bool _bookingsLoaded = false; // bookings + statuses were fetched once already
   InsightsSummary _insights = const InsightsSummary();
 
   DateTimeRange? _range;
@@ -56,20 +57,27 @@ class _InsightsScreenState extends State<InsightsScreen> {
 
   /// Loads this screen's data.
   /// Uses 4 APIs (see inline notes).
-  Future<void> _load() async {
+  /// [reloadBookings] false = only the period summary is fetched again (the bookings list does
+  /// not depend on the selected period, it is filtered on the phone).
+  Future<void> _load({bool reloadBookings = true}) async {
+    final skipBookings = !reloadBookings && _bookingsLoaded;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       // API call: bookingService.getAllBookings → GET /artists/bookings/get_all/
-      final bookings = await ServiceLocator.bookingService.getAllBookingsEveryPage();
+      final bookings = skipBookings
+          ? _bookings
+          : await ServiceLocator.bookingService.getAllBookingsEveryPage();
 
-      List<StatusItem> statuses = [];
-      try {
-        // API call: coreService.getBookingStatuses → GET /core/booking-status/get_all/
-        statuses = await ServiceLocator.coreService.getBookingStatuses();
-      } catch (_) {
+      List<StatusItem> statuses = skipBookings ? _statuses : [];
+      if (!skipBookings) {
+        try {
+          // API call: coreService.getBookingStatuses → GET /core/booking-status/get_all/
+          statuses = await ServiceLocator.coreService.getBookingStatuses();
+        } catch (_) {
+        }
       }
 
       // API call: artistBusiness.getInsights → GET /artists/insights/summary/
@@ -82,6 +90,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
       setState(() {
         _bookings = bookings;
         _statuses = statuses;
+        _bookingsLoaded = skipBookings || statuses.isNotEmpty;
         _insights = insights;
         _loading = false;
       });
@@ -101,7 +110,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
   /// Changes the period and reloads the summary from the server.
   void _applyRange(DateTimeRange? r) {
     setState(() => _range = r);
-    _load();
+    _load(reloadBookings: false);
   }
 
   /// Status label.
@@ -165,14 +174,14 @@ class _InsightsScreenState extends State<InsightsScreen> {
 
   /// Upcoming count.
   int get _upcomingCount => _filteredBookings.where((b) {
-        final label = _statusLabel(b.statusId);
-        if (label != 'pending' && label != 'confirmed') return false;
-        final d = DateTime.tryParse(b.bookingDate);
-        if (d == null) return false;
-        final today = DateTime.now();
-        final day = DateTime(d.year, d.month, d.day);
-        return !day.isBefore(DateTime(today.year, today.month, today.day));
-      }).length;
+    final label = _statusLabel(b.statusId);
+    if (label != 'pending' && label != 'confirmed') return false;
+    final d = DateTime.tryParse(b.bookingDate);
+    if (d == null) return false;
+    final today = DateTime.now();
+    final day = DateTime(d.year, d.month, d.day);
+    return !day.isBefore(DateTime(today.year, today.month, today.day));
+  }).length;
 
   /// Period label.
   String _periodLabel() {
@@ -231,42 +240,42 @@ class _InsightsScreenState extends State<InsightsScreen> {
 
   /// UI piece: stat.
   Widget _stat(IconData icon, String label, String value) => AiraCard(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            SunndariIconBubble(icon: icon, size: 44),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label, style: AiraText.sans(fontSize: 12, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                  Text(value, style: AiraText.sans(fontSize: 22, fontWeight: FontWeight.w800, color: AiraColors.charcoal)),
-                ],
-              ),
-            ),
-          ],
+    padding: const EdgeInsets.all(14),
+    child: Row(
+      children: [
+        SunndariIconBubble(icon: icon, size: 44),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: AiraText.sans(fontSize: 12, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
+              Text(value, style: AiraText.sans(fontSize: 22, fontWeight: FontWeight.w800, color: AiraColors.charcoal)),
+            ],
+          ),
         ),
-      );
+      ],
+    ),
+  );
 
   /// UI piece: empty block.
   Widget _emptyBlock(IconData icon, String title, String body) => AiraCard(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        child: Column(
-          children: [
-            Container(
-              width: 76,
-              height: 76,
-              decoration: const BoxDecoration(color: AiraColors.blush, shape: BoxShape.circle),
-              child: Icon(icon, size: 34, color: AiraColors.rose),
-            ),
-            const SizedBox(height: 12),
-            Text(title, textAlign: TextAlign.center, style: AiraText.sans(fontSize: 14.5, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
-            const SizedBox(height: 4),
-            Text(body, textAlign: TextAlign.center, style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft, height: 1.4)),
-          ],
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+    child: Column(
+      children: [
+        Container(
+          width: 76,
+          height: 76,
+          decoration: const BoxDecoration(color: AiraColors.blush, shape: BoxShape.circle),
+          child: Icon(icon, size: 34, color: AiraColors.rose),
         ),
-      );
+        const SizedBox(height: 12),
+        Text(title, textAlign: TextAlign.center, style: AiraText.sans(fontSize: 14.5, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
+        const SizedBox(height: 4),
+        Text(body, textAlign: TextAlign.center, style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft, height: 1.4)),
+      ],
+    ),
+  );
 
   /// Top services straight from the API (already sorted by bookings).
   List<MapEntry<String, int>> _topServices() =>

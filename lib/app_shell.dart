@@ -92,6 +92,16 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
   bool _appInForeground = true;
   bool _refreshing = false;
   DateTime _lastLoad = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastCompletenessCheck = DateTime.fromMillisecondsSinceEpoch(0);
+
+  // Many names arriving together -> ONE rebuild instead of one rebuild per name.
+  Timer? _namesFlushTimer;
+  void _scheduleNamesFlush() {
+    _namesFlushTimer ??= Timer(const Duration(milliseconds: 150), () {
+      _namesFlushTimer = null;
+      if (mounted) setState(() {});
+    });
+  }
   int? _liveArtistId;
 
   /// App went to background / came back.
@@ -99,7 +109,8 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appInForeground = state == AppLifecycleState.resumed;
     if (_appInForeground) {
-      _loadData(silent: true); // coming back to the app → fetch the latest
+      // Coming back to the app → fetch the latest (skipped if data was loaded just now).
+      if (DateTime.now().difference(_lastLoad).inSeconds > 20) _loadData(silent: true);
       NotificationBadge.instance.refresh();
       _checkServiceAnnouncements();
     }
@@ -154,6 +165,7 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
     NotificationBadge.instance.newNotificationTick.removeListener(_onPushArrived);
     _toastTimer?.cancel();
     _reloadTimer?.cancel();
+    _namesFlushTimer?.cancel();
     _bookingsSub?.cancel();
     super.dispose();
   }
@@ -264,24 +276,27 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
     _refreshing = true;
     if (!silent) setState(() => _loading = true);
     try {
-      final results = await Future.wait([
+      final results = await Future.wait<Object>([
         ServiceLocator.artistService.getProfile(),
         ServiceLocator.bookingService.getAllBookingsEveryPage(),
+        // Booking statuses are fetched at the same time (a failure here must not fail the whole load).
+        ServiceLocator.coreService.getBookingStatuses().then<Object>(
+              (v) => v,
+          onError: (Object e) {
+            if (kDebugMode) {
+              debugPrint('[Dashboard] booking-statuses lookup failed — status '
+                  'badges will show as "Open" until this is retried: $e');
+            }
+            return <StatusItem>[];
+          },
+        ),
       ]);
       final profile = results[0] as ArtistProfile;
       // The server returns PAID bookings only (filter_key=paymentStatus&filter_value=paid).
       final bookings = (results[1] as List<Booking>).where((b) => !_paymentBlockedIds.contains(b.bookingId)).toList();
       _unconfirmedLiveIds.removeWhere((id) => bookings.any((b) => b.bookingId == id));
 
-      List<StatusItem> statuses = [];
-      try {
-        statuses = await ServiceLocator.coreService.getBookingStatuses();
-      } catch (e) {
-        if (kDebugMode) {
-          debugPrint('[Dashboard] booking-statuses lookup failed — status '
-              'badges will show as "Open" until this is retried: $e');
-        }
-      }
+      final List<StatusItem> statuses = results[2] as List<StatusItem>;
 
       if (!mounted) return;
       setState(() {
@@ -297,7 +312,12 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
       }
       _loadCustomerNames(bookings);
       _loadPackageNames(bookings);
-      _checkProfileCompleteness(profile);
+      // The profile-completeness check costs several API calls: on silent background refreshes
+      // do it at most every 3 minutes (screen opens / manual refreshes still do it every time).
+      if (!silent || DateTime.now().difference(_lastCompletenessCheck) > const Duration(minutes: 3)) {
+        _lastCompletenessCheck = DateTime.now();
+        _checkProfileCompleteness(profile);
+      }
       if (_liveArtistId != profile.artistId) {
         _liveArtistId = profile.artistId;
         _listenForLiveBookings(profile.artistId);
@@ -323,7 +343,10 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
       try {
         final pkg = await ServiceLocator.artistService.getPackage(id);
         if (!mounted) return;
-        if (pkg.name.trim().isNotEmpty) setState(() => _packageNames[id] = pkg.name.trim());
+        if (pkg.name.trim().isNotEmpty) {
+          _packageNames[id] = pkg.name.trim();
+          _scheduleNamesFlush();
+        }
       } catch (_) {}
     }));
   }
@@ -339,7 +362,8 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
         final profile = await ServiceLocator.userService.getProfile(id);
         if (!mounted) return;
         if (profile.name.trim().isNotEmpty) {
-          setState(() => _customerNames[id] = profile.name.trim());
+          _customerNames[id] = profile.name.trim();
+          _scheduleNamesFlush();
         }
       } catch (_) {
       }
@@ -687,10 +711,10 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
               Positioned.fill(
                 child: (_screen == 'home' || _screen == 'business' || _screen == 'calendar')
                     ? RefreshIndicator(
-                        color: AiraColors.rose,
-                        onRefresh: () => _loadData(silent: true),
-                        child: mainScreen,
-                      )
+                  color: AiraColors.rose,
+                  onRefresh: () => _loadData(silent: true),
+                  child: mainScreen,
+                )
                     : mainScreen,
               ),
               if (_toast != null) AiraToast(text: _toast!),

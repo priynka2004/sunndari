@@ -84,15 +84,23 @@ class ProfileCompleteness {
 
   /// Loads this screen's data.
   static Future<ProfileCompleteness> load({ArtistProfile? profile}) async {
-    final extra = await ArtistExtraDetails.load();
-    final progress = await OnboardingProgress.load(profile: profile);
-    bool page = true;
-    try {
-      page = await pageBuilt();
-    } catch (_) {
-      // offline: fall back to the last known result instead of blocking the artist
-      page = await wasMarkedComplete();
-    }
+    // These three do not depend on each other, so they run together instead of one after another.
+    final pageF = () async {
+      try {
+        return await pageBuilt();
+      } catch (_) {
+        // offline: fall back to the last known result instead of blocking the artist
+        return await wasMarkedComplete();
+      }
+    }();
+    final parts = await Future.wait<Object>([
+      ArtistExtraDetails.load().then<Object>((v) => v),
+      OnboardingProgress.load(profile: profile).then<Object>((v) => v),
+      pageF.then<Object>((v) => v),
+    ]);
+    final extra = parts[0] as ArtistExtraDetails;
+    final progress = parts[1] as OnboardingProgress;
+    final bool page = parts[2] as bool;
     // The photo may only exist on the server (new phone / reinstall / cleared app data) → check both.
     var hasPhoto = (extra.profilePhotoPath ?? '').isNotEmpty || (profile?.profilePhotoUrl ?? '').isNotEmpty;
     if (!hasPhoto && profile == null) {

@@ -644,53 +644,46 @@ class _CalendarScreenState extends State<CalendarScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 10),
-            child: Text('${_months[_selected.month - 1]} ${_selected.year}',
-                style: AiraText.sans(fontSize: 18, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
-          ),
-          SizedBox(
-            height: 88,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _sliderDays,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (_, i) {
-                final d = today.add(Duration(days: i));
-                final sel = _sameDay(d, _selected);
-                final c = _dayColor(d);
-                return GestureDetector(
-                  onTap: () => setState(() => _select(d)),
-                  child: Container(
-                    width: 58,
-                    decoration: BoxDecoration(
-                      color: sel ? AiraColors.roseDeep.withOpacity(0.10) : c?.withOpacity(0.22),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: sel ? AiraColors.roseDeep : (c ?? AiraColors.hair),
-                        width: sel ? 2.4 : 1.4,
-                      ),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(_dayShort[d.weekday - 1],
-                            style: AiraText.sans(fontSize: 12, fontWeight: FontWeight.w700, color: AiraColors.charcoalSoft)),
-                        const SizedBox(height: 2),
-                        Text('${d.day}',
-                            style: AiraText.sans(
-                                fontSize: 20,
-                                fontWeight: sel ? FontWeight.w900 : FontWeight.w700,
-                                color: AiraColors.charcoal)),
-                        const SizedBox(height: 2),
-                        Text(_months[d.month - 1].substring(0, 3),
-                            style: AiraText.sans(fontSize: 11, color: AiraColors.charcoalSoft)),
-                      ],
+          // Month title + date strip. The title follows the strip: it always shows the month of the
+          // first date you can see, so it changes while you scroll (e.g. 30 Nov → 1 Dec = "December").
+          _MonthDateStrip(
+            startDay: today,
+            days: _sliderDays,
+            months: _months,
+            tileBuilder: (d) {
+              final sel = _sameDay(d, _selected);
+              final c = _dayColor(d);
+              return GestureDetector(
+                onTap: () => setState(() => _select(d)),
+                child: Container(
+                  width: 58,
+                  decoration: BoxDecoration(
+                    color: sel ? AiraColors.roseDeep.withOpacity(0.10) : c?.withOpacity(0.22),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: sel ? AiraColors.roseDeep : (c ?? AiraColors.hair),
+                      width: sel ? 2.4 : 1.4,
                     ),
                   ),
-                );
-              },
-            ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(_dayShort[d.weekday - 1],
+                          style: AiraText.sans(fontSize: 12, fontWeight: FontWeight.w700, color: AiraColors.charcoalSoft)),
+                      const SizedBox(height: 2),
+                      Text('${d.day}',
+                          style: AiraText.sans(
+                              fontSize: 20,
+                              fontWeight: sel ? FontWeight.w900 : FontWeight.w700,
+                              color: AiraColors.charcoal)),
+                      const SizedBox(height: 2),
+                      Text(_months[d.month - 1].substring(0, 3),
+                          style: AiraText.sans(fontSize: 11, color: AiraColors.charcoalSoft)),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
           const SizedBox(height: 10),
           Wrap(spacing: 16, runSpacing: 6, children: [
@@ -736,6 +729,90 @@ class _CalendarScreenState extends State<CalendarScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Month title + horizontal date strip. Keeps its own scroll position, so the title can never get
+/// out of sync with what is shown in the strip. The title shows the month of the first date that is
+/// (at least half) visible at the left edge of the strip.
+class _MonthDateStrip extends StatefulWidget {
+  const _MonthDateStrip({
+    required this.startDay,
+    required this.days,
+    required this.months,
+    required this.tileBuilder,
+  });
+
+  /// First day of the strip (today).
+  final DateTime startDay;
+  final int days;
+  final List<String> months;
+
+  /// Builds one date tile (width 58).
+  final Widget Function(DateTime day) tileBuilder;
+
+  @override
+  State<_MonthDateStrip> createState() => _MonthDateStripState();
+}
+
+class _MonthDateStripState extends State<_MonthDateStrip> {
+  static const double _tileWidth = 58;
+  static const double _gap = 8;
+  static const double _extent = _tileWidth + _gap;
+
+  final ScrollController _ctrl = ScrollController();
+  final ValueNotifier<int> _first = ValueNotifier<int>(0); // index of the first visible date
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.removeListener(_onScroll);
+    _ctrl.dispose();
+    _first.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_ctrl.hasClients) return;
+    final i = ((_ctrl.offset + _extent / 2) / _extent).floor().clamp(0, widget.days - 1).toInt();
+    if (i != _first.value) _first.value = i; // only the small title is rebuilt, not the whole screen
+  }
+
+  DateTime _day(int i) => DateTime(widget.startDay.year, widget.startDay.month, widget.startDay.day + i);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 10),
+          child: ValueListenableBuilder<int>(
+            valueListenable: _first,
+            builder: (_, i, __) {
+              final d = _day(i.clamp(0, widget.days - 1).toInt());
+              return Text('${widget.months[d.month - 1]} ${d.year}',
+                  style: AiraText.sans(fontSize: 18, fontWeight: FontWeight.w800, color: AiraColors.roseDeep));
+            },
+          ),
+        ),
+        SizedBox(
+          height: 88,
+          child: ListView.separated(
+            controller: _ctrl,
+            scrollDirection: Axis.horizontal,
+            itemCount: widget.days,
+            separatorBuilder: (_, __) => const SizedBox(width: _gap),
+            itemBuilder: (_, i) => widget.tileBuilder(_day(i)),
+          ),
+        ),
+      ],
     );
   }
 }

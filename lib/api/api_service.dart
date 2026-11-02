@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import '../utils/api_logger.dart';
 import '../utils/app_session.dart';
 import 'api_endpoints.dart';
@@ -25,6 +26,50 @@ class ApiService {
 
   static const _requestTimeout = Duration(seconds: 20);
 
+  /// One shared client for the whole app: the connection (TCP + TLS) is reused
+  /// instead of being opened again for every request. Idle connections are
+  /// dropped after 10 s so a stale one is never reused.
+  static final http.Client _client =
+  IOClient(HttpClient()..idleTimeout = const Duration(seconds: 10));
+
+  /// Short-lived GET cache for a few endpoints that the app asks for again and
+  /// again within seconds (startup / refresh). Any POST / PUT / DELETE clears it.
+  static final Map<String, _CacheEntry> _cache = {};
+  static final Map<String, Future<http.Response>> _inFlight = {};
+  static int _cacheGen = 0;
+  static const Map<String, Duration> _cacheTtls = {
+    ApiEndpoints.artistsProfileGet: Duration(seconds: 10),
+    ApiEndpoints.artistsOnboardingStatus: Duration(seconds: 10),
+    ApiEndpoints.artistsServicesGetAll: Duration(seconds: 10),
+    ApiEndpoints.artistsPortfolioGetAll: Duration(seconds: 10),
+    ApiEndpoints.coreBookingStatusGetAll: Duration(minutes: 10),
+  };
+
+  /// False for writes that cannot change anything we cache.
+  static bool _writeAffectsCache(Uri uri, dynamic body) {
+    final p = uri.path;
+    if (p.startsWith('/chat/') ||
+        p.startsWith('/help_center/') ||
+        p.startsWith('/notifications/')) {
+      return false;
+    }
+    // Saving the phone's push (FCM) token: body is only {"fcm_token": ...}.
+    if (p == '/users/profile/update/' &&
+        body is Map &&
+        body.length == 1 &&
+        body.containsKey('fcm_token')) {
+      return false;
+    }
+    return true;
+  }
+
+  /// Forgets every cached GET (call it if some data changed outside ApiService).
+  static void clearCache() {
+    _cacheGen++;
+    _cache.clear();
+    _inFlight.clear();
+  }
+
   static const _uploadTimeout = Duration(seconds: 120);
 
   /// Called when the saved login can no longer be used (access token dead
@@ -39,6 +84,7 @@ class ApiService {
     final last = _lastExpiredNotice;
     if (last != null && now.difference(last) < const Duration(seconds: 3)) return;
     _lastExpiredNotice = now;
+    clearCache();
     onSessionExpired?.call();
   }
 
@@ -70,7 +116,33 @@ class ApiService {
   Future<http.Response> get(String endpoint,
       {Map<String, dynamic>? queryParameters}) {
     final uri = _buildUri(endpoint, queryParameters);
-    return _sendWithRetry('GET', uri, () => http.get(uri, headers: _headers));
+    Future<http.Response> send() =>
+        _sendWithRetry('GET', uri, () => _client.get(uri, headers: _headers));
+
+    final ttl = _cacheTtls[endpoint];
+    if (ttl == null) return send();
+
+    // Cached per logged-in token + full URL (so another user / another artist_id never mixes).
+    final key = '${_token ?? ''}|$uri';
+    final hit = _cache[key];
+    if (hit != null && DateTime.now().isBefore(hit.expires)) {
+      return Future.value(hit.response);
+    }
+    final pending = _inFlight[key];
+    if (pending != null) return pending; // same call already running -> share it
+
+    final gen = _cacheGen;
+    late final Future<http.Response> f;
+    f = send().then((r) {
+      if (gen == _cacheGen) {
+        _cache[key] = _CacheEntry(r, DateTime.now().add(ttl));
+      }
+      return r;
+    }).whenComplete(() {
+      if (identical(_inFlight[key], f)) _inFlight.remove(key);
+    });
+    _inFlight[key] = f;
+    return f;
   }
 
   /// POST request with JSON body.
@@ -79,7 +151,7 @@ class ApiService {
     return _sendWithRetry(
       'POST',
       uri,
-          () => http.post(uri,
+          () => _client.post(uri,
           headers: _headers, body: data != null ? jsonEncode(data) : null),
       body: data,
     );
@@ -91,7 +163,7 @@ class ApiService {
     return _sendWithRetry(
       'PUT',
       uri,
-          () => http.put(uri,
+          () => _client.put(uri,
           headers: _headers, body: data != null ? jsonEncode(data) : null),
       body: data,
     );
@@ -101,7 +173,7 @@ class ApiService {
   Future<http.Response> delete(String endpoint,
       {Map<String, dynamic>? queryParameters}) {
     final uri = _buildUri(endpoint, queryParameters);
-    return _sendWithRetry('DELETE', uri, () => http.delete(uri, headers: _headers));
+    return _sendWithRetry('DELETE', uri, () => _client.delete(uri, headers: _headers));
   }
 
   /// POST multipart/form-data (file upload with text fields).
@@ -123,7 +195,7 @@ class ApiService {
           request.files.add(
               await http.MultipartFile.fromPath(f.field, f.path, filename: f.filename));
         }
-        final streamed = await request.send();
+        final streamed = await _client.send(request);
         return http.Response.fromStream(streamed);
       },
       fields: fields,
@@ -153,7 +225,7 @@ class ApiService {
           request.files.add(
               await http.MultipartFile.fromPath(f.field, f.path, filename: f.filename));
         }
-        final streamed = await request.send();
+        final streamed = await _client.send(request);
         return http.Response.fromStream(streamed);
       },
       fields: fields,
@@ -175,21 +247,30 @@ class ApiService {
         Duration timeout = _requestTimeout,
       }) async {
 
-    final sentAuth = _hasToken;
+    // A write clears the cache, except writes that can never change cached data
+    // (chat / help-center / notifications, and the push-token-only profile update).
+    final isWrite = method != 'GET' && _writeAffectsCache(uri, body);
+    if (isWrite) clearCache(); // data is about to change -> never serve old cached data
 
-    var response = await _attempt(method, uri, doRequest, timeout,
-        body: body, fields: fields, files: files);
+    try {
+      final sentAuth = _hasToken;
 
-    if (response.statusCode == 401 &&
-        (AppSession.instance.refreshToken?.isNotEmpty ?? false)) {
-      final refreshed = await _refreshToken();
-      if (refreshed) {
-        response = await _attempt(method, uri, doRequest, timeout,
-            body: body, fields: fields, files: files, retry: true);
+      var response = await _attempt(method, uri, doRequest, timeout,
+          body: body, fields: fields, files: files);
+
+      if (response.statusCode == 401 &&
+          (AppSession.instance.refreshToken?.isNotEmpty ?? false)) {
+        final refreshed = await _refreshToken();
+        if (refreshed) {
+          response = await _attempt(method, uri, doRequest, timeout,
+              body: body, fields: fields, files: files, retry: true);
+        }
       }
-    }
 
-    return _handle(response, sentAuth: sentAuth);
+      return _handle(response, sentAuth: sentAuth);
+    } finally {
+      if (isWrite) clearCache(); // and again after it finished
+    }
   }
 
   Future<http.Response> _attempt(
@@ -291,7 +372,7 @@ class ApiService {
 
     final http.Response response;
     try {
-      response = _withUtf8(await http
+      response = _withUtf8(await _client
           .post(
         uri,
         headers: const {
@@ -468,4 +549,11 @@ class ApiService {
     if (m.contains('already')) return 'This $label Is Already In Use.';
     return 'Please Enter A Valid $label.';
   }
+}
+
+/// One cached GET response and when it stops being valid.
+class _CacheEntry {
+  final http.Response response;
+  final DateTime expires;
+  const _CacheEntry(this.response, this.expires);
 }
