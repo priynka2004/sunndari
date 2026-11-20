@@ -4,6 +4,7 @@
 // APIs used:
 //   GET /artists/profile/get/
 
+import '../onboarding/registration_fee_screen.dart';
 import 'post_login_router.dart';
 import 'package:flutter/material.dart';
 import '../../app_shell.dart';
@@ -171,6 +172,8 @@ class _RegistrationStatusScreenState extends State<RegistrationStatusScreen> {
   Future<void> _resubmit() async {
     setState(() => _resubmitting = true);
     try {
+      // After an admin rejection the fee is refunded — the artist pays again before resubmitting.
+      if (kRegistrationFeeBeforeSubmit && !await ensureRegistrationFeePaid(context)) return;
       await ServiceLocator.artistBusiness.submitOnboarding();
       if (!mounted) return;
       AppFeedback.showSuccess(context, 'Sent For Review ✓ We’ll Notify You Once It Is Checked.');

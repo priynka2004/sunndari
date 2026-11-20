@@ -20,6 +20,14 @@ import 'packages_screen.dart' show AddServiceFromNotificationScreen;
 import '../utils/app_feedback.dart';
 
 /// SCREEN: Notification Detail — opened from the list or from a push-notification tap.
+/// "PAYOUT_ACCOUNT_CHANGED" → "Payout Account Changed"
+String _prettyType(String type) => type
+    .trim()
+    .split(RegExp(r'[_\-\s]+'))
+    .where((w) => w.isNotEmpty)
+    .map((w) => w[0].toUpperCase() + w.substring(1).toLowerCase())
+    .join(' ');
+
 class NotificationDetailScreen extends StatefulWidget {
   final int notificationId;
   final AppNotification? notification;
@@ -197,7 +205,7 @@ class _NotificationDetailScreenState extends State<NotificationDetailScreen> {
                                         borderRadius: BorderRadius.circular(20),
                                       ),
                                       child: Text(
-                                        _item!.type.toUpperCase(),
+                                        _prettyType(_item!.type),
                                         style: AiraText.sans(
                                           fontSize: 10.5,
                                           fontWeight: FontWeight.w600,

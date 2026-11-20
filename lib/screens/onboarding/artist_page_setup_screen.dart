@@ -29,6 +29,7 @@ import '../../utils/profile_completeness.dart';
 import '../../utils/onboarding_progress.dart' show kMinPortfolioPhotos;
 import '../../utils/service_locator.dart';
 import '../../widgets/common.dart';
+import 'registration_fee_screen.dart';
 import '../auth/logout_helper.dart';
 import '../auth/registration_status_screen.dart' show goToAppShell;
 import '../help_center_screen.dart';
@@ -330,7 +331,7 @@ class _ArtistPageSetupScreenState extends State<ArtistPageSetupScreen> {
   /// Lets the user pick cover.
   Future<void> _pickCover() async {
     try {
-      final picked = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1600, imageQuality: 85);
+      final picked = await ImagePicker().pickImage(source: ImageSource.gallery); // original photo — the server shrinks it
       if (picked == null) return;
       final dir = await getApplicationDocumentsDirectory();
       final ext = picked.path.split('.').last;
@@ -377,7 +378,7 @@ class _ArtistPageSetupScreenState extends State<ArtistPageSetupScreen> {
       await ServiceLocator.artistService.updateProfile(ArtistProfileUpdate(
         displayName: name,
         bio: bio.isEmpty ? null : bio,
-        profileType: _extra.profileType?.name,
+        profileTypes: _extra.profileTypes.isEmpty ? null : _extra.profileTypes.map((t) => t.name).toList(),
       ));
       if (_photoDirty || _coverDirty) {
         // API call: artistBusiness.uploadProfilePhotos → POST /artists/profile/photo/upload/ (multipart)
@@ -430,6 +431,7 @@ class _ArtistPageSetupScreenState extends State<ArtistPageSetupScreen> {
     'documents': 'ID Proof',
     'payoutAccount': 'Bank Account',
     'agreement': 'Terms & Privacy',
+    'registrationFee': 'Registration Fee',
   };
 
   /// Pushes the artist's specialities (picked during onboarding) once their services exist — the server only
@@ -462,13 +464,21 @@ class _ArtistPageSetupScreenState extends State<ArtistPageSetupScreen> {
   Future<bool> _submitForReview() async {
     final biz = ServiceLocator.artistBusiness;
     await _pushSpecialities();
-    final OnboardingStatus st;
+    OnboardingStatus st;
     try {
       st = await biz.getOnboardingStatus();
     } catch (e) {
       if (mounted) AppFeedback.showError(context, e);
       return false;
     }
+    // Registration fee: must be paid before submitting (exempt / already-paid artists skip this).
+    // The fee endpoint decides (registrationRequired is false for paid / exempt artists), so this also covers an
+    // artist whose status already shows "approved" but who has not paid.
+    if (!mounted) return false;
+    if (kRegistrationFeeBeforeSubmit && !await ensureRegistrationFeePaid(context)) return false;
+    try {
+      st = await biz.getOnboardingStatus(); // refresh: steps.registrationFee is now true
+    } catch (_) {}
     // Already approved: edits go live without another review. Already submitted: nothing to send.
     if (st.isApproved || st.isSubmitted) return true;
     if (st.steps.isNotEmpty && !st.canSubmit) {

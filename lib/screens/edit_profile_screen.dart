@@ -25,9 +25,11 @@ import '../utils/service_locator.dart';
 import '../utils/app_session.dart';
 import '../utils/app_feedback.dart';
 import '../utils/artist_extra_details.dart';
+import '../utils/pending_email.dart';
 import '../utils/dob_input.dart';
 import '../utils/experience.dart';
 import '../utils/media_url.dart';
+import '../widgets/google_place_picker.dart';
 
 /// SCREEN: Edit Profile.
 class EditProfileScreen extends StatefulWidget {
@@ -47,11 +49,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _addressCtrl = TextEditingController();
   final _pinCtrl = TextEditingController();
   String _email = '';
+  String _pendingEmail = ''; // typed at sign-up, not verified yet
   String _phone = '';
 
   String? _selectedCity;
   String? _experience; // one of kExperienceRanges — same value as Onboarding and Profile
   final Set<ArtistProfileType> _profileTypes = {}; // freelancer, studio, or both
+  int _serverTypeCount = 0; // how many work types the server already has for this artist
   final _instaCtrl = TextEditingController();
   List<String> _specialities = const [];
   ArtistExtraDetails _existingExtra = const ArtistExtraDetails();
@@ -59,6 +63,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   int? _baseAddressId;
   String? _serverAddress;
   String? _serverPin;
+  double? _baseLat; // exact Google Maps location of the address (saved with it)
+  double? _baseLng;
+  bool _geoDirty = false; // a new place was picked on the map and still has to be saved
 
   // Photos
   String? _photoUrl;
@@ -82,7 +89,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _brandCtrl.text = p?.displayName ?? '';
     _brandLocked = (p?.displayName ?? '').trim().isNotEmpty;
     _selectedCity = (p?.city != null && p!.city!.isNotEmpty) ? p.city : null;
-    if (p != null && p.yearsExperience > 0) _experience = experienceLabelFromYears(p.yearsExperience);
+    if (p != null) _experience = experienceDisplay(rangeKey: p.experienceRange, years: p.yearsExperience) ?? _experience;
     _photoUrl = p?.profilePhotoUrl;
     _coverUrl = p?.coverPhotoUrl;
     _nameCtrl.text = AppSession.instance.name ?? '';
@@ -95,8 +102,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   Future<void> _loadExtra() async {
     try {
       final p = await ServiceLocator.artistService.getProfile();
-      if (p.profileType == 'freelance') _profileTypes.add(ArtistProfileType.freelance);
-      if (p.profileType == 'studio') _profileTypes.add(ArtistProfileType.studio);
+      // The server keeps one or both work types now (profileTypes); profileType is only its first item.
+      final serverTypes = p.profileTypes.isNotEmpty ? p.profileTypes : (p.profileType == null ? <String>[] : [p.profileType!]);
+      _serverTypeCount = serverTypes.length;
+      if (serverTypes.contains('studio')) _profileTypes.add(ArtistProfileType.studio);
+      if (serverTypes.contains('freelance')) _profileTypes.add(ArtistProfileType.freelance);
       if ((p.instagramUrl ?? '').isNotEmpty) _instaCtrl.text = p.instagramUrl!;
       final d = DateTime.tryParse(p.dateOfBirth ?? '');
       if (d != null) _dobCtrl.text = formatDob(d);
@@ -105,7 +115,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         _brandLocked = true;
       }
       if ((p.bio ?? '').isNotEmpty && _bioCtrl.text.isEmpty) _bioCtrl.text = p.bio!;
-      if (p.yearsExperience > 0) _experience = experienceLabelFromYears(p.yearsExperience);
+      _experience = experienceDisplay(rangeKey: p.experienceRange, years: p.yearsExperience) ?? _experience;
       if ((p.city ?? '').isNotEmpty) _selectedCity = p.city;
       _photoUrl = p.profilePhotoUrl ?? _photoUrl;
       _coverUrl = p.coverPhotoUrl ?? _coverUrl;
@@ -116,7 +126,21 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         if (m.isNotEmpty) {
           _serverAddress = m.first.addressLine1;
           _serverPin = m.first.pinCode;
+          _baseLat = m.first.latitude;
+          _baseLng = m.first.longitude;
         }
+      }
+    } catch (_) {}
+    // Older profiles stored ONE profile_type, but the venues saved in the Location step are location types:
+    // In-Salon (id 2) = studio, Home Visit / On-Site Event (ids 1, 3) = freelance. Both present → tick both.
+    final venueTypes = <ArtistProfileType>[];
+    try {
+      // API call: GET /artists/locations/get_all/
+      final raw = await ServiceLocator.artistService.getAllLocations();
+      final rows = raw is List ? raw : (raw is Map && raw['data'] is List ? raw['data'] as List : const []);
+      final ids = rows.whereType<Map>().map((r) => (r['locationTypeId'] as num?)?.toInt()).whereType<int>().toSet();
+      if (ids.contains(2) && (ids.contains(1) || ids.contains(3))) {
+        venueTypes..add(ArtistProfileType.studio)..add(ArtistProfileType.freelance); // studio first = same value the server keeps
       }
     } catch (_) {}
     final extra = await ArtistExtraDetails.load();
@@ -127,8 +151,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       _addressCtrl.text = _serverAddress ?? extra.address ?? '';
       _pinCtrl.text = _serverPin ?? extra.pincode ?? '';
       if (_dobCtrl.text.isEmpty && extra.dob != null) _dobCtrl.text = formatDob(extra.dob);
-      // Both choices made in onboarding are kept on the device (the server stores one).
-      if (extra.profileTypes.isNotEmpty) _profileTypes..clear()..addAll(extra.profileTypes);
+      // The server keeps both work types now. An artist who chose both before that, and whose server profile
+      // still has only one, keeps both ticked here (they are sent to the server when the profile is saved).
+      if (_serverTypeCount < 2) {
+        if (extra.profileTypes.isNotEmpty) _profileTypes..clear()..addAll(extra.profileTypes);
+        if (venueTypes.length == 2) _profileTypes..clear()..addAll(venueTypes);
+      }
       _specialities = extra.specialities;
       if (_brandCtrl.text.isEmpty) _brandCtrl.text = extra.professionalName ?? extra.displayName ?? '';
     });
@@ -145,9 +173,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     try {
       final UserProfile account = await ServiceLocator.userService.getProfile(userId);
       if (!mounted) return;
+      final pending = (account.email ?? '').isNotEmpty ? '' : await PendingEmail.load();
+      if ((account.email ?? '').isNotEmpty) PendingEmail.clear();
+      if (!mounted) return;
       setState(() {
         _nameCtrl.text = account.name;
         _email = account.email ?? '';
+        _pendingEmail = pending;
         _phone = account.phoneNumber ?? '';
         _loadingAccount = false;
       });
@@ -180,7 +212,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   Future<void> _pickCoverPhoto() async {
     try {
-      final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1600, imageQuality: 85);
+      final x = await ImagePicker().pickImage(source: ImageSource.gallery); // original photo — the server shrinks it
       if (x != null && mounted) setState(() => _newCoverPath = x.path);
     } catch (_) {}
   }
@@ -357,21 +389,29 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               border: Border.all(color: AiraColors.pinkBorder, width: 1.1),
             ),
             child: Row(children: [
-              Expanded(child: Text('Not Added', style: AiraText.sans(fontSize: 14.5, color: AiraColors.charcoalSoft))),
+              Expanded(
+                child: Text(_pendingEmail.isEmpty ? 'Not Added' : _pendingEmail,
+                    style: AiraText.sans(fontSize: 14.5, color: _pendingEmail.isEmpty ? AiraColors.charcoalSoft : AiraColors.charcoal)),
+              ),
               TextButton(
                 onPressed: () async {
-                  final added = await showChangeContactSheet(context, isEmail: true);
+                  final added = await showChangeContactSheet(context, isEmail: true, initialValue: _pendingEmail);
                   if (added && mounted) {
+                    PendingEmail.clear();
                     AppFeedback.showSuccess(context, 'Email Added ✓');
                     _loadAccount();
                   }
                 },
-                child: Text('Add', style: AiraText.sans(fontWeight: FontWeight.w700, color: AiraColors.rose)),
+                child: Text(_pendingEmail.isEmpty ? 'Add' : 'Verify', style: AiraText.sans(fontWeight: FontWeight.w700, color: AiraColors.rose)),
               ),
             ]),
           ),
           const SizedBox(height: 5),
-          Text('Once Added, Your Email Cannot Be Changed.', style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoalSoft)),
+          Text(
+              _pendingEmail.isEmpty
+                  ? 'Once Added, Your Email Cannot Be Changed.'
+                  : 'You Entered This While Signing Up. Verify It With A Code To Save It. Once Added, It Cannot Be Changed.',
+              style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoalSoft)),
         ],
       ),
     );
@@ -487,14 +527,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final line = _addressCtrl.text.trim();
     final pin = _pinCtrl.text.trim();
     if (line.isEmpty && pin.isEmpty) return;
-    if (line == (_serverAddress ?? '') && pin == (_serverPin ?? '') && _baseAddressId != null) return;
+    if (line == (_serverAddress ?? '') && pin == (_serverPin ?? '') && _baseAddressId != null && !_geoDirty) return;
     final city = (_selectedCity ?? '').trim().isEmpty ? 'India' : _selectedCity!.trim();
     final user = ServiceLocator.userService;
     if (_baseAddressId != null) {
-      await user.updateAddress(CustomerAddressUpdate(addressId: _baseAddressId!, addressLine1: line, city: city, pinCode: pin));
+      await user.updateAddress(CustomerAddressUpdate(addressId: _baseAddressId!, addressLine1: line, city: city, pinCode: pin, latitude: _baseLat, longitude: _baseLng));
     } else {
       final before = (await user.getAllAddresses(limit: 50)).data.map((a) => a.addressId).toSet();
-      await user.createAddress(CustomerAddressCreate(addressLine1: line, city: city, pinCode: pin));
+      await user.createAddress(CustomerAddressCreate(addressLine1: line, city: city, pinCode: pin, latitude: _baseLat, longitude: _baseLng));
       final created = (await user.getAllAddresses(limit: 50)).data.where((a) => !before.contains(a.addressId)).toList();
       if (created.isEmpty) throw Exception('Could Not Save Your Address. Please Try Again.');
       final newId = created.last.addressId;
@@ -512,6 +552,26 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
     _serverAddress = line;
     _serverPin = pin;
+    _geoDirty = false;
+  }
+
+  /// Choose the address on Google Maps: fills address, pincode and city and keeps the exact latitude / longitude.
+  Future<void> _pickOnGoogle() async {
+    final place = await showGooglePlacePicker(context, title: 'Search Your Address');
+    if (place == null || !mounted) return;
+    setState(() {
+      _baseLat = place.lat;
+      _baseLng = place.lng;
+      _geoDirty = true;
+      _addressCtrl.text = place.addressLine;
+      if (place.pincode.isNotEmpty) _pinCtrl.text = place.pincode;
+      if (place.city.isNotEmpty) {
+        _selectedCity = place.city;
+        _cityKey++;
+      }
+      _errors.remove('address');
+      _errors.remove('pin');
+    });
   }
 
   /// Saves everything.
@@ -534,9 +594,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         ServiceLocator.artistService.updateProfile(ArtistProfileUpdate(
           bio: _bioCtrl.text.trim().isEmpty ? null : _bioCtrl.text.trim(),
           city: _selectedCity,
-          yearsExperience: experienceYearsFromLabel(_experience!),
+          yearsExperience: experienceYearsFromLabel(_experience!), // older app versions; the range below wins
+          experienceRange: experienceRangeKeyFromLabel(_experience),
           dateOfBirth: iso,
-          profileType: _profileTypes.isEmpty ? null : _profileTypes.first.name, // server accepts one value
+          profileTypes: _profileTypes.isEmpty ? null : _profileTypes.map((t) => t.name).toList(), // one or both
           displayName: _brandLocked ? null : brand,
           instagramUrl: _instaCtrl.text.trim().isEmpty ? null : _instaCtrl.text.trim(),
         )),
@@ -724,6 +785,20 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     ]),
 
                     _section(Icons.location_on_outlined, 'Location', [
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: OutlinedButton.icon(
+                          onPressed: _pickOnGoogle,
+                          icon: Icon((_baseLat != null && _baseLng != null) ? Icons.check_circle_rounded : Icons.map_outlined, size: 18),
+                          label: Text((_baseLat != null && _baseLng != null) ? 'Location Pinned — Change On Google Maps' : 'Choose Address On Google Maps'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AiraColors.roseDeep,
+                            side: const BorderSide(color: AiraColors.hair),
+                            minimumSize: const Size(double.infinity, 46),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
+                        ),
+                      ),
                       SunndariField(
                         label: 'Address',
                         controller: _addressCtrl,

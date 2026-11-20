@@ -8,6 +8,9 @@ class CustomerAddressCreate {
   final String city;
   final String pinCode;
   final bool isDefault;
+  /// Exact Google Maps location of the address (saved together with the address when chosen on the map).
+  final double? latitude;
+  final double? longitude;
 
   CustomerAddressCreate({
     required this.addressLine1,
@@ -15,6 +18,8 @@ class CustomerAddressCreate {
     required this.city,
     required this.pinCode,
     this.isDefault = false,
+    this.latitude,
+    this.longitude,
   });
 
   /// Converts this object to JSON for the API.
@@ -24,5 +29,6 @@ class CustomerAddressCreate {
     'city': city,
     'pin_code': pinCode,
     'is_default': isDefault,
+    if (latitude != null && longitude != null) ...{'latitude': latitude, 'longitude': longitude},
   };
 }

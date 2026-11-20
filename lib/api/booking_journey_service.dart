@@ -1,6 +1,9 @@
 // FILE: api/booking_journey_service.dart
 // Booking lifecycle APIs: On My Way -> Arrived -> Start PIN -> Complete Service (request) -> Completion PIN.
+// In-Salon bookings skip On My Way / Arrived: Start Service (request) -> Start PIN.
+// Before Complete Service the artist uploads a camera photo of the finished service.
 
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/booking/booking.dart';
 import 'api_endpoints.dart';
@@ -62,6 +65,50 @@ class BookingJourneyService {
     return getBooking(bookingId);
   }
 
+  static const _startReqPrefix = 'start_pin_requested_';
+
+  /// True if the artist already tapped "Start Service" for this In-Salon booking.
+  Future<bool> isStartRequested(int bookingId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('$_startReqPrefix$bookingId') ?? false;
+  }
+
+  /// Forgets the local "requested" flag (e.g. the server says the PIN was never requested).
+  Future<void> clearStartRequested(int bookingId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('$_startReqPrefix$bookingId');
+  }
+
+  /// In-Salon bookings: the artist taps "Start Service" once the customer is there. The backend creates the
+  /// Start Service PIN and notifies the customer, who reads it out. Calling again re-sends the notification
+  /// (same PIN), at most once a minute. There is no On My Way / Arrived step for an In-Salon booking.
+  /// API: PUT /artists/bookings/start_pin/request/   body: {"booking_id": int}
+  Future<void> requestStartPin(int bookingId) async {
+    try {
+      await _apiService.put(ApiEndpoints.artistBookingsStartPinRequest, data: {'booking_id': bookingId});
+    } catch (e) {
+      throw JourneyReasonError(_reasonFrom(e));
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('$_startReqPrefix$bookingId', true);
+  }
+
+  /// Uploads the photo of the finished service (taken with the camera while the service is in progress).
+  /// Uploading again replaces the photo. The original is sent as it is — the server shrinks it.
+  /// API: PUT /artists/bookings/completion_proof/upload/   (multipart: booking_id + photo)
+  Future<Booking> uploadCompletionProof(int bookingId, XFile photo) async {
+    try {
+      await _apiService.putMultipart(
+        ApiEndpoints.artistBookingsCompletionProofUpload,
+        fields: {'booking_id': '$bookingId'},
+        files: [UploadFile('photo', photo.path, filename: photo.name)],
+      );
+    } catch (e) {
+      throw JourneyReasonError(_reasonFrom(e));
+    }
+    return getBooking(bookingId);
+  }
+
   static const _completionReqPrefix = 'completion_pin_requested_';
 
   /// True if the artist already tapped "Complete Service" for this booking.
@@ -103,6 +150,22 @@ class BookingJourneyService {
       throw JourneyReasonError(reason);
     }
     await _clearLockout(bookingId, 'start');
+    await clearStartRequested(bookingId);
+    return getBooking(bookingId);
+  }
+
+  /// Advance bookings: the artist says whether the rest of the money was received (Yes / No tick).
+  /// The artist never types an amount — the server knows what is due. A Yes is final; a No can become Yes later.
+  /// API: PUT /artists/bookings/balance/confirm/   body: {"booking_id": int, "received": bool}
+  Future<Booking> confirmBalance(int bookingId, {required bool received}) async {
+    try {
+      await _apiService.put(ApiEndpoints.artistBookingsBalanceConfirm, data: {
+        'booking_id': bookingId,
+        'received': received,
+      });
+    } catch (e) {
+      throw JourneyReasonError(_reasonFrom(e));
+    }
     return getBooking(bookingId);
   }
 

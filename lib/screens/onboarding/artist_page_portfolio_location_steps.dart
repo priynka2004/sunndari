@@ -15,8 +15,9 @@
 //   DELETE /artists/availability/schedule/remove/
 //   POST /artists/availability/schedule/set/
 //   PUT /artists/profile/update/            (city, travel_time_before_minutes, return_buffer_minutes)
-//   GET/POST/PUT/DELETE /artists/service_areas/*   (travel charge: free | per_visit only)
+//   GET/POST/PUT/DELETE /artists/service_areas/*   (travel charge: free | per_visit | per_km — per_km only when kPerKmChargeEnabled)
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -39,18 +40,19 @@ import '../../theme/tokens.dart';
 import '../../utils/api_logger.dart';
 import '../../utils/app_feedback.dart';
 import '../../utils/artist_page_data.dart';
+import '../../utils/artist_extra_details.dart';
+import '../../utils/travel_charge_config.dart';
 import '../../utils/indian_cities.dart';
 import '../../utils/media_url.dart';
+import '../../utils/video_limits.dart';
 import '../../utils/service_locator.dart';
 import '../../widgets/city_autocomplete_field.dart';
+import '../../widgets/google_place_picker.dart';
 import '../../widgets/common.dart';
 import '../../widgets/sunndari_sheets.dart';
 import 'artist_page_services_steps.dart' show ArtistPageStep;
 import '../../widgets/sunndari_time_picker.dart';
-
-/// Backend currently rejects `per_km` ("Per-kilometre travel charges are not available yet; use free or per_visit").
-/// Set to true once /artists/service_areas/add/ and /update/ accept per_km.
-const bool _kPerKmAvailable = false;
+import '../../widgets/video_viewer.dart';
 
 /// UI piece: heading.
 Widget _heading(String title, String subtitle, {double size = 32}) => Padding(
@@ -80,11 +82,33 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
   List<Portfolio> _items = [];
   List<ServiceSubCategory> _subs = [];
 
+  /// While a video is still being processed by the server, the list is re-read every few seconds.
+  Timer? _processingPoll;
+
   /// Runs once when the screen opens; starts: _load().
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  /// Frees the timer when the screen closes.
+  @override
+  void dispose() {
+    _processingPoll?.cancel();
+    super.dispose();
+  }
+
+  /// Starts / stops the background re-read depending on whether a video is still processing.
+  void _syncProcessingPoll() {
+    if (!_items.any((p) => p.isProcessing)) {
+      _processingPoll?.cancel();
+      _processingPoll = null;
+      return;
+    }
+    _processingPoll ??= Timer.periodic(const Duration(seconds: 8), (_) {
+      if (mounted) _load();
+    });
   }
 
   /// Loads this screen's data.
@@ -110,6 +134,7 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
       if (mounted) AppFeedback.showError(context, e);
     }
     if (mounted) setState(() => _loading = false);
+    _syncProcessingPoll();
   }
 
   /// Cat name.
@@ -162,7 +187,7 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
             mediaType: type,
             subCategoryId: sub,
             file: files[i],
-            isWorkSample: true, // photos added here are the artist's work samples (admin review + public)
+            isWorkSample: type == MediaTypeEnum.image, // photos are work samples (admin review + public); videos are not
             caption: '${type == MediaTypeEnum.video ? 'Video' : 'Look'} ${_items.length + i + 1}',
           ));
           ok++;
@@ -180,7 +205,8 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
   /// Adds photos.
   Future<void> _addPhotos() async {
     try {
-      final picked = await ImagePicker().pickMultiImage(imageQuality: 85);
+      // The original photos are sent as they are — the server shrinks them (up to 25 MB each).
+      final picked = await ImagePicker().pickMultiImage();
       await _upload(picked, MediaTypeEnum.image);
     } catch (e) {
       if (mounted) AppFeedback.showError(context, e);
@@ -190,8 +216,14 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
   /// Adds video.
   Future<void> _addVideo() async {
     try {
-      final v = await ImagePicker().pickVideo(source: ImageSource.gallery, maxDuration: const Duration(minutes: 2));
-      if (v != null) await _upload([v], MediaTypeEnum.video);
+      final v = await ImagePicker().pickVideo(source: ImageSource.gallery, maxDuration: VideoLimits.maxDuration);
+      if (v == null) return;
+      final problem = await VideoLimits.problem(v);
+      if (problem != null) {
+        if (mounted) AppFeedback.showWarning(context, problem);
+        return;
+      }
+      await _upload([v], MediaTypeEnum.video);
     } catch (e) {
       if (mounted) AppFeedback.showError(context, e);
     }
@@ -234,7 +266,7 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
                     alignment: Alignment.center,
                     child: const Icon(Icons.check_circle_rounded, size: 44, color: AiraColors.success),
                   )
-                      : _thumb(p, h: 170),
+                      : (isVideo ? GestureDetector(onTap: () => _play(p), child: _thumb(p, h: 170)) : _thumb(p, h: 170)),
                 ),
               ),
               const SizedBox(height: 8),
@@ -244,8 +276,15 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
                   try {
                     final picker = ImagePicker();
                     final x = isVideo
-                        ? await picker.pickVideo(source: ImageSource.gallery, maxDuration: const Duration(minutes: 2))
-                        : await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+                        ? await picker.pickVideo(source: ImageSource.gallery, maxDuration: VideoLimits.maxDuration)
+                        : await picker.pickImage(source: ImageSource.gallery);
+                    if (x != null && isVideo) {
+                      final problem = await VideoLimits.problem(x);
+                      if (problem != null) {
+                        if (ctx.mounted) AppFeedback.showWarning(ctx, problem);
+                        return;
+                      }
+                    }
                     if (x != null) setS(() => newFile = x);
                   } catch (e) {
                     if (ctx.mounted) AppFeedback.showError(ctx, e);
@@ -316,7 +355,7 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
           mediaType: isVideo ? MediaTypeEnum.video : MediaTypeEnum.image,
           subCategoryId: sub,
           file: newFile!,
-          isWorkSample: true,
+          isWorkSample: !isVideo,
           caption: name,
         ));
         // 2) find the new item so it can take the old one's place
@@ -378,6 +417,26 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
     }
   }
 
+  bool _isVideo(Portfolio p) => p.mediaType.toLowerCase().contains('video');
+
+  /// Plays a portfolio video in a full-screen player.
+  Future<void> _play(Portfolio p) async {
+    if (p.isProcessing) {
+      AppFeedback.showInfo(context, 'This Video Is Still Being Processed. It Will Be Ready Shortly.');
+      return;
+    }
+    if (p.processingFailed) {
+      AppFeedback.showWarning(context, p.processingError ?? 'We Could Not Process This Video. Please Try Another File.');
+      return;
+    }
+    final url = resolveMediaUrl(p.fileUrl);
+    if (url == null) {
+      AppFeedback.showWarning(context, 'This Video Is Not Available Right Now.');
+      return;
+    }
+    await showVideoViewer(context, url: url, title: p.caption);
+  }
+
   /// UI piece: thumb.
   Widget _thumb(Portfolio p, {double? h}) {
     final isVideo = p.mediaType.toLowerCase().contains('video');
@@ -387,6 +446,75 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
       alignment: Alignment.center,
       child: Icon(i, size: 34, color: AiraColors.rose),
     );
+    if (isVideo && p.isProcessing) {
+      return Container(
+        color: AiraColors.blush,
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: (h ?? 100) > 80 ? 28 : 18,
+              height: (h ?? 100) > 80 ? 28 : 18,
+              child: const CircularProgressIndicator(strokeWidth: 2.4, color: AiraColors.rose),
+            ),
+            if ((h ?? 100) > 80) ...[
+              const SizedBox(height: 8),
+              Text('Processing…', style: AiraText.sans(fontSize: 11.5, fontWeight: FontWeight.w600, color: AiraColors.roseDeep)),
+            ],
+          ],
+        ),
+      );
+    }
+    if (isVideo && p.processingFailed) {
+      return Container(
+        color: AiraColors.blush,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: (h ?? 100) > 80 ? 34 : 22, color: AiraColors.errorText),
+            if ((h ?? 100) > 80) ...[
+              const SizedBox(height: 6),
+              Text(
+                p.processingError ?? 'Could Not Process This Video',
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: AiraText.sans(fontSize: 11, color: AiraColors.errorText),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+    if (isVideo && url != null) {
+      final poster = resolveMediaUrl(p.posterUrl ?? '');
+      final hasPoster = poster != null && poster.isNotEmpty;
+      final big = (h ?? 100) > 80;
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          if (hasPoster)
+            Image.network(poster!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: AiraColors.blush))
+          else
+            Container(color: AiraColors.blush),
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.play_circle_fill_rounded, size: big ? 54 : 30, color: hasPoster ? Colors.white : AiraColors.rose),
+                if (big && !hasPoster) ...[
+                  const SizedBox(height: 6),
+                  Text('Tap To Play', style: AiraText.sans(fontSize: 11.5, fontWeight: FontWeight.w600, color: AiraColors.roseDeep)),
+                ],
+              ],
+            ),
+          ),
+        ],
+      );
+    }
     if (isVideo || url == null) return placeholder(isVideo ? Icons.play_circle_outline_rounded : Icons.image_outlined);
     return Image.network(
       url,
@@ -409,7 +537,7 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        GestureDetector(onTap: () => _edit(p), child: AspectRatio(aspectRatio: 0.82, child: _thumb(p))),
+        GestureDetector(onTap: () => _isVideo(p) ? _play(p) : _edit(p), child: AspectRatio(aspectRatio: 0.82, child: _thumb(p))),
         Padding(
           padding: const EdgeInsets.fromLTRB(6, 6, 2, 6),
           child: Row(
@@ -504,7 +632,7 @@ class PortfolioStepState extends State<PortfolioStep> implements ArtistPageStep 
           ],
         ),
         const SizedBox(height: 4),
-        Text(_items.isEmpty ? 'No Looks Yet — Add Your Best Work Above.' : 'Tap A Look To Change Its Photo, Name Or Category.',
+        Text(_items.isEmpty ? 'No Looks Yet — Add Your Best Work Above.' : 'Tap A Photo To Edit It, Or A Video To Play It. Use The Pencil To Change Name Or Category.',
             style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft)),
         const SizedBox(height: 10),
         if (_items.isNotEmpty && !_reorder)
@@ -609,6 +737,12 @@ class LocationStep extends StatefulWidget {
 class LocationStepState extends State<LocationStep> implements ArtistPageStep {
   static const _dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+  /// Travel charge is either free or a fixed amount per visit (per km is not supported).
+  /// Visiting charge: "Per visit" = fixed amount, "Per km" = rate per kilometre (only when kPerKmChargeEnabled).
+  static const String _kChargeUnit = 'Per visit';
+  static const String _kChargeUnitKm = 'Per km';
+  String _unit = _kChargeUnit;
+
   bool _loading = true;
   int _venue = 0;
   final Set<String> _areas = {};
@@ -622,7 +756,9 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
   bool _pinLoading = false;
   String? _pinMsg; // helper / problem text under the pincode field
   int? _baseAddressId; // existing base address on the server (update instead of duplicate)
-  String _unit = 'Per visit';
+  double? _baseLat; // exact Google Maps location of the base address (saved with the address)
+  double? _baseLng;
+  bool _baseMoved = false; // true when the artist picked a new place on the map in this session
   int _travelBefore = 0; // minutes blocked before a home visit (0-240)
   int _returnBuffer = 0; // minutes blocked after a home visit (0-240)
   final Set<int> _days = {0, 1, 2, 3, 4, 5};
@@ -658,15 +794,31 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
   }
 
   /// Loads this screen's data.
-  /// Uses 2 APIs (see inline notes).
+  /// Uses several APIs (see inline notes).
   Future<void> _load() async {
     try {
       final prefs = await ArtistPageLocal.location();
       _venue = prefs.venue;
+      try {
+        // First visit (no location type saved on the server yet): follow the "I am a" choice from onboarding —
+        // Freelance → Client's Venue, Studio → My Studio, both ticked → Both.
+        final raw = await ServiceLocator.artistService.getAllLocations();
+        final rows = raw is List ? raw : (raw is Map && raw['data'] is List ? raw['data'] as List : const []);
+        if (rows.isEmpty) {
+          final chosen = (await ArtistExtraDetails.load()).profileTypes.toSet();
+          if (chosen.length >= 2) {
+            _venue = 2;
+          } else if (chosen.contains(ArtistProfileType.studio)) {
+            _venue = 1;
+          } else if (chosen.contains(ArtistProfileType.freelance)) {
+            _venue = 0;
+          }
+        }
+      } catch (_) {}
       _areas.addAll(prefs.areas);
       _travelFree = prefs.travelFree;
       if (prefs.travelAmount > 0) _amount.text = prefs.travelAmount.toStringAsFixed(0);
-      _unit = prefs.travelUnit == 'Per km' ? 'Per km' : 'Per visit';
+      _unit = (kPerKmChargeEnabled && prefs.travelUnit == _kChargeUnitKm) ? _kChargeUnitKm : _kChargeUnit;
       try {
         // API call: artistService.getProfile → GET /artists/profile/get/
         final prof = await ServiceLocator.artistService.getProfile();
@@ -681,6 +833,8 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
             _addr1.text = m.first.addressLine1;
             _pin.text = m.first.pinCode;
             _baseCity = m.first.city;
+            _baseLat = m.first.latitude;
+            _baseLng = m.first.longitude;
           }
         }
       } catch (_) {}
@@ -692,10 +846,12 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
           _areas
             ..clear()
             ..addAll(active.map((a) => a.city));
+          // "per_visit" (and "per_km" when it is enabled) mean a paid travel charge; anything else shows as Free.
           final type = active.first.travelChargeType;
-          _travelFree = type != 'per_visit' && type != 'per_km';
-          if (type == 'per_km') _unit = 'Per km';
-          if (type == 'per_visit') _unit = 'Per visit';
+          final kmOn = kPerKmChargeEnabled && type == 'per_km';
+          _travelFree = type != 'per_visit' && !kmOn;
+          if (kmOn) _unit = _kChargeUnitKm;
+          if (type == 'per_visit') _unit = _kChargeUnit;
           debugPrint('[LocationStep] loaded service area: ${active.first.city} ${active.first.travelChargeType} ${active.first.travelCharge}');
           if (!_travelFree && active.first.travelCharge > 0) {
             _amount.text = active.first.travelCharge.toStringAsFixed(0);
@@ -725,7 +881,6 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
         }
       } catch (_) {}
     } catch (_) {}
-    if (!_kPerKmAvailable) _unit = 'Per visit'; // an old saved "Per km" is shown / saved as "Per visit"
     if (mounted) setState(() => _loading = false);
   }
 
@@ -811,6 +966,70 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
         _pinMsg = "Couldn't Look Up The Pincode. Please Choose Your City Below.";
       });
     }
+  }
+
+  /// Lets the artist choose the salon / studio / base address on Google Maps.
+  /// Fills pincode, city, area and street from the chosen place and keeps its exact latitude / longitude.
+  Future<void> _pickOnGoogle() async {
+    final place = await showGooglePlacePicker(context, title: 'Search Your Salon / Studio Address');
+    if (place == null || !mounted) return;
+    setState(() {
+      _baseLat = place.lat;
+      _baseLng = place.lng;
+      _baseMoved = true;
+      if (place.pincode.isNotEmpty) _pin.text = place.pincode;
+      if (place.city.isNotEmpty) _baseCity = place.city;
+      _pinMsg = null;
+      _pinAreas = place.area.isEmpty ? [] : [place.area];
+      _area = place.area.isEmpty ? null : place.area;
+      var line = place.line1.isNotEmpty ? place.line1 : (place.name.isNotEmpty ? place.name : place.area);
+      if (line.length > 100) line = line.substring(0, 100);
+      _addr1.text = line;
+    });
+  }
+
+  /// "Choose on Google Maps" tile shown above the address fields; shows a tick once a map location is saved.
+  Widget _mapPickTile() {
+    final has = _baseLat != null && _baseLng != null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: _pickOnGoogle,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          decoration: BoxDecoration(
+            color: AiraColors.card,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: has ? AiraColors.roseDeep : AiraColors.hair),
+          ),
+          child: Row(
+            children: [
+              Icon(has ? Icons.check_circle_rounded : Icons.map_outlined, size: 22, color: AiraColors.roseDeep),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(has ? 'Location Pinned On Google Maps' : 'Choose Address On Google Maps',
+                        style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w700, color: AiraColors.charcoal)),
+                    const SizedBox(height: 2),
+                    Text(
+                      has
+                          ? (_baseMoved ? 'Tap To Change The Location.' : 'Saved With Your Address. Tap To Change.')
+                          : 'Search Your Salon / Studio Or Use Your Current Location.',
+                      style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoalSoft, height: 1.3),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: AiraColors.charcoalSoft),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// Validates the input.
@@ -911,6 +1130,8 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
           addressLine1: _addressLine,
           city: baseCity,
           pinCode: _pin.text.trim(),
+          latitude: _baseLat,
+          longitude: _baseLng,
         ));
       } else {
         // API call: userService.getAllAddresses → GET /users/address/get_all/
@@ -920,6 +1141,8 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
           addressLine1: _addressLine,
           city: baseCity,
           pinCode: _pin.text.trim(),
+          latitude: _baseLat,
+          longitude: _baseLng,
         ));
         final after = (await user.getAllAddresses(limit: 50)).data;
         final created = after.where((a) => !before.contains(a.addressId)).toList();
@@ -928,10 +1151,10 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
       }
 
       // API call: artistService.updateProfile → PUT /artists/profile/update/
-      // profile_type (registrationFields step): Client's venue → freelance, My studio / Both → studio
+      // profile_types (registrationFields step): Client's venue → freelance, My studio → studio, Both → both
       await api.updateProfile(ArtistProfileUpdate(
         city: baseCity,
-        profileType: _venue == 0 ? 'freelance' : 'studio',
+        profileTypes: _venue == 0 ? ['freelance'] : _venue == 1 ? ['studio'] : ['studio', 'freelance'],
         baseAddressId: _baseAddressId,
         travelTimeBeforeMinutes: _travelBefore,
         returnBufferMinutes: _returnBuffer,
@@ -939,7 +1162,7 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
 
       // Service areas: make the server list match the cities picked here.
       final biz = ServiceLocator.artistBusiness;
-      final chargeType = _travelFree ? 'free' : (_unit == 'Per km' ? 'per_km' : 'per_visit');
+      final chargeType = _travelFree ? 'free' : (kPerKmChargeEnabled && _unit == _kChargeUnitKm ? 'per_km' : 'per_visit');
       final amount = _travelFree ? 0.0 : (double.tryParse(_amount.text.trim()) ?? 0);
       final wanted = _areas.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
       // API call: artistBusiness.getServiceAreas → GET /artists/service_areas/get_all/
@@ -947,20 +1170,12 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
       final byCity = {for (final a in existingAreas) a.city.toLowerCase(): a};
       for (final c in wanted) {
         final ex = byCity[c.toLowerCase()];
-        try {
-          if (ex == null) {
-            // API call: artistBusiness.addServiceArea → POST /artists/service_areas/add/
-            await biz.addServiceArea(city: c, travelChargeType: chargeType, travelCharge: amount);
-          } else if (ex.travelChargeType != chargeType || ex.travelCharge != amount) {
-            // API call: artistBusiness.updateServiceArea → PUT /artists/service_areas/update/
-            await biz.updateServiceArea(ex.serviceAreaId, travelChargeType: chargeType, travelCharge: amount);
-          }
-        } catch (_) {
-          // The server may not accept "Per km" yet — say so clearly instead of a confusing error.
-          if (chargeType == 'per_km') {
-            throw Exception('Per km Travel Charge Could Not Be Saved Right Now. Please Choose "Per visit" Or Try Again Later.');
-          }
-          rethrow;
+        if (ex == null) {
+          // API call: artistBusiness.addServiceArea → POST /artists/service_areas/add/
+          await biz.addServiceArea(city: c, travelChargeType: chargeType, travelCharge: amount);
+        } else if (ex.travelChargeType != chargeType || ex.travelCharge != amount) {
+          // API call: artistBusiness.updateServiceArea → PUT /artists/service_areas/update/
+          await biz.updateServiceArea(ex.serviceAreaId, travelChargeType: chargeType, travelCharge: amount);
         }
       }
       final keep = wanted.map((e) => e.toLowerCase()).toSet();
@@ -1124,6 +1339,7 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
         ),
         const SizedBox(height: 16),
         _section('Your Base Address'),
+        _mapPickTile(),
         SunndariField(
           label: 'Pincode',
           controller: _pin,
@@ -1191,20 +1407,41 @@ class LocationStepState extends State<LocationStep> implements ArtistPageStep {
               const SizedBox(width: 10),
               Expanded(
                 flex: 2,
-                child: SunndariSelectField(
-                  label: '',
-                  hint: 'Per visit',
-                  value: _unit,
-                  onTap: () async {
-                    final v = await showSunndariChoiceSheet(context,
-                        title: 'Charge Type', subtitle: 'Choose How Your Travel Is Charged.', options: _kPerKmAvailable ? const ['Per visit', 'Per km'] : const ['Per visit'], selected: _unit, boxed: true);
-                    if (v != null) setState(() => _unit = v);
-                  },
-                ),
+                child: kPerKmChargeEnabled
+                    ? SunndariSelectField(
+                        label: '',
+                        hint: _kChargeUnit,
+                        value: _unit,
+                        onTap: () async {
+                          final v = await showSunndariChoiceSheet(context,
+                              title: 'Visiting Charge',
+                              subtitle: 'Per Visit Is A Fixed Amount. Per Km Is A Rate For Every Kilometre To The Client.',
+                              options: const [_kChargeUnit, _kChargeUnitKm],
+                              selected: _unit,
+                              boxed: true);
+                          if (v != null) setState(() => _unit = v);
+                        },
+                      )
+                    // Per km is switched off until the backend accepts it, so this is a fixed label.
+                    // Adjust the height (52) to match your SunndariField so both boxes line up.
+                    : Container(
+                        height: 52,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: AiraColors.pinkFill,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AiraColors.pinkBorder, width: 1.1),
+                        ),
+                        child: Text(_kChargeUnit,
+                            style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w600, color: AiraColors.roseDeep)),
+                      ),
               ),
             ],
           ),
-          Text('Travel Charges Will Be Shown Separately To Clients.',
+          Text(
+              kPerKmChargeEnabled && _unit == _kChargeUnitKm
+                  ? 'Rate For Every Kilometre. The Distance Between You And The Client Is Worked Out At Booking.'
+                  : 'Travel Charges Will Be Shown Separately To Clients.',
               style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoalSoft)),
         ],
         const SizedBox(height: 16),

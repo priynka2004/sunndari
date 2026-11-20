@@ -17,7 +17,7 @@ import '../models/artist/update_package.dart';
 import '../models/core/service_sub_category.dart';
 import '../utils/app_feedback.dart';
 import '../utils/service_locator.dart';
-import 'onboarding/artist_page_services_steps.dart' show kMakeupTypeCategory, ServicesPricingStep, ServicesPricingStepState;
+import 'onboarding/artist_page_services_steps.dart' show kMakeupTypeCategory, isAdditionalServiceSub, ServicesPricingStep, ServicesPricingStepState;
 
 /// SCREEN: My Packages — list, create, edit, delete packages.
 class PackagesScreen extends StatefulWidget {
@@ -40,7 +40,7 @@ class _PackagesScreenState extends State<PackagesScreen> {
 
   /// Real services only ("Makeup Type" entries are not services, so they are left out of the dropdown).
   List<ServiceSubCategory> get _services {
-    final only = _subCategories.where((s) => !_isMakeupType(s)).toList();
+    final only = _subCategories.where((s) => !_isMakeupType(s) && !isAdditionalServiceSub(s)).toList();
     return only.isEmpty ? _subCategories : only;
   }
 

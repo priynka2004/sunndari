@@ -49,6 +49,8 @@ class ApiEndpoints {
   static const String artistsAvailabilityScheduleSet = '/artists/availability/schedule/set/';
   static const String artistsAvailabilityScheduleGetAll = '/artists/availability/schedule/get_all/';
   static const String artistsAvailabilityScheduleRemove = '/artists/availability/schedule/remove/';
+  /// The artist's own day as customers see it — the exact bookable start times, made by the server.
+  static const String artistsAvailabilitySlots = '/artists/availability/slots/';
   static const String artistsAvailabilityBlockAdd = '/artists/availability/block/add/';
   static const String artistsAvailabilityBlockGetAll = '/artists/availability/block/get_all/';
   static const String artistsAvailabilityBlockRemove = '/artists/availability/block/remove/';
@@ -74,6 +76,12 @@ class ApiEndpoints {
   static const String artistsPayoutAccountGet = '/artists/payout_account/get/';
   static const String artistsPayoutAccountSet = '/artists/payout_account/set/';
 
+  // ── Artist registration fee (paid in onboarding, BEFORE submitting for admin review) ──
+  static const String artistsRegistrationFee = '/artists/registration/fee/';
+  static const String artistsRegistrationPromoValidate = '/artists/registration/promo/validate/';
+  static const String artistsRegistrationPaymentInitiate = '/artists/registration/payment/initiate/';
+  static const String artistsRegistrationPaymentVerify = '/artists/registration/payment/verify/';
+
   // ── Catalogue: portfolio order, package photo, add-ons, service areas, brands ──
   static const String artistsPortfolioReorder = '/artists/portfolio/reorder/';
   static const String artistsPackagesPhotoUpload = '/artists/packages/photo/upload/';
@@ -87,6 +95,11 @@ class ApiEndpoints {
   static const String artistsServiceAreasGetAll = '/artists/service_areas/get_all/';
   static const String artistsServiceAreasRemove = '/artists/service_areas/remove/';
   static const String artistsServiceAreasUpdate = '/artists/service_areas/update/';
+  // Salon addresses (the salons / studios an artist works from; max 10 active)
+  static const String artistsSalonAddressesCreate = '/artists/salon_addresses/create/';
+  static const String artistsSalonAddressesGetAll = '/artists/salon_addresses/get_all/';
+  static const String artistsSalonAddressesUpdate = '/artists/salon_addresses/update/';
+  static const String artistsSalonAddressesDelete = '/artists/salon_addresses/delete/';
   static const String artistsBrandsRequest = '/artists/brands/request/';
   static const String artistsBrandsRequestsGetAll = '/artists/brands/requests/get_all/';
   static const String coreBrandsGetAll = '/core/brands/get_all/';
@@ -143,10 +156,18 @@ class ApiEndpoints {
   static const String artistBookingsUpdateStatus = '/artists/bookings/update_status/';
   static const String artistBookingsOnMyWay = '/artists/bookings/on_my_way/';
   static const String artistBookingsArrived = '/artists/bookings/arrived/';
+  /// In-Salon only: the artist taps "Start Service" → backend creates the Start Service PIN and notifies the customer.
+  static const String artistBookingsStartPinRequest = '/artists/bookings/start_pin/request/';
   static const String artistBookingsStartPinVerify = '/artists/bookings/start_pin/verify/';
+  /// Photo of the finished service (camera): PUT multipart booking_id + photo. Needed before the completion PIN.
+  static const String artistBookingsCompletionProofUpload = '/artists/bookings/completion_proof/upload/';
+  /// The completion photo itself (authenticated image): GET ?booking_id=
+  static const String artistBookingsCompletionProofFile = '/artists/bookings/completion_proof/file/';
   /// Artist taps "Complete service" → backend creates the Completion PIN and notifies the customer.
   static const String artistBookingsCompletionPinRequest = '/artists/bookings/completion_pin/request/';
   static const String artistBookingsCompletionPinVerify = '/artists/bookings/completion_pin/verify/';
+  /// Advance (20%) bookings: the artist answers Yes / No "did you receive the rest?" before completing. PUT {booking_id, received}.
+  static const String artistBookingsBalanceConfirm = '/artists/bookings/balance/confirm/';
 
   static const String notificationsGet = '/notifications/get/';
   static const String notificationsGetAll = '/notifications/get_all/';

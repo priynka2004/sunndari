@@ -300,13 +300,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   TimeOfDay _tod(int minutes) => TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60);
 
-  /// Hourly slots [startMin, endMin] inside the selected day's working hours.
+  /// Slot length in minutes (client: 30-minute slots instead of 1 hour).
+  static const int _slotMinutes = 30;
+
+  /// 30-minute slots [startMin, endMin] inside the selected day's working hours.
   List<List<int>> _slots() {
     final st = _s.hour * 60 + _s.minute;
     final en = _e.hour * 60 + _e.minute;
     final out = <List<int>>[];
-    for (var m = st; m < en; m += 60) {
-      out.add([m, m + 60 > en ? en : m + 60]);
+    for (var m = st; m < en; m += _slotMinutes) {
+      out.add([m, m + _slotMinutes > en ? en : m + _slotMinutes]);
     }
     return out;
   }
@@ -483,13 +486,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
   static const _cBlocked = AiraColors.errorText;
   static const _cBooked = Color(0xFFE0A100);
 
-  /// Minute ranges already taken by live bookings on [iso] (1 hour from the start time).
+  /// Minute ranges already taken by live bookings on [iso]: from the start time to the booking's real end time
+  /// (a 1 hr 30 min service blocks 1.5 hours). Falls back to 1 hour only when no end time is known.
   List<List<int>> _bookedRanges(String iso) {
     final out = <List<int>>[];
     for (final s in widget.slots) {
       if (s.bookingId == null || !_isLive(s) || s.date != iso) continue;
       final st = _minOrNull(s.rawStartTime);
-      if (st != null) out.add([st, st + 60]);
+      if (st == null) continue;
+      final en = _minOrNull(s.rawEndTime);
+      out.add([st, (en != null && en > st) ? en : st + 60]);
     }
     return out;
   }
@@ -512,7 +518,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     Text(t, style: AiraText.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AiraColors.roseDeep)),
   ]);
 
-  /// Day tab: tap hours to block / open them for the selected day. Booked hours show yellow and cannot be changed.
+  /// Day tab: tap slots to block / open them for the selected day. Booked slots show yellow and cannot be changed.
   List<Widget> _daySection() {
     final iso = _iso(_selected);
     final fullDay = _blocked.contains(iso);
@@ -526,7 +532,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
               style: AiraText.sans(fontSize: 14, color: AiraColors.charcoalSoft, height: 1.4)),
         )
       else ...[
-        Text('Tap An Hour To Block Or Open It.',
+        Text('Tap A Slot To Block Or Open It.',
             style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
         const SizedBox(height: 10),
         Wrap(spacing: 16, runSpacing: 6, children: [
@@ -556,7 +562,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   onTap: past
                       ? null
                       : booked
-                      ? () => AppFeedback.showInfo(context, 'This Hour Is Already Booked.')
+                      ? () => AppFeedback.showInfo(context, 'This Slot Is Already Booked.')
                       : () => _toggleSlot(sl),
                   child: Container(
                     alignment: Alignment.center,

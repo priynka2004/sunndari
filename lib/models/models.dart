@@ -1,3 +1,4 @@
+import '../utils/payment_status.dart';
 // FILE: models/models.dart  |  MODEL
 // UI booking slot model (BookingSlot) + SlotStatus used by Bookings / Calendar screens.
 
@@ -14,6 +15,12 @@ class BookingSlot {
   final SlotStatus status;
   final double? amount;
   final String? rawStartTime;
+  /// "HH:mm:ss" end of the booking (start + package duration + add-ons) — the calendar uses it to block the whole time.
+  final String? rawEndTime;
+  /// The status in words made by the server ("Confirmed", "Completed and Payment Received", …) — shown as is.
+  final String? statusLabel;
+  /// Raw payment status from the server (`partially_paid`, `paid`, …).
+  final String? paymentStatus;
 
   const BookingSlot({
     this.bookingId,
@@ -24,7 +31,13 @@ class BookingSlot {
     required this.status,
     this.amount,
     this.rawStartTime,
+    this.rawEndTime,
+    this.statusLabel,
+    this.paymentStatus,
   });
+
+  /// Completed service whose payment is still partial / in progress.
+  bool get paymentInProgress => status == SlotStatus.completed && PaymentStatusX.isInProgress(paymentStatus);
 
   /// Starts date time.
   DateTime? get startDateTime {
@@ -99,6 +112,9 @@ class BookingSlot {
       status: status ?? this.status,
       amount: amount,
       rawStartTime: rawStartTime,
+      // A changed status makes the server's words for the old one stale.
+      statusLabel: status == null ? statusLabel : null,
+      paymentStatus: paymentStatus,
     );
   }
 }

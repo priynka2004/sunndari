@@ -58,26 +58,27 @@ class ArtistAddOn {
   });
 
   factory ArtistAddOn.fromJson(Map<String, dynamic> j) => ArtistAddOn(
-        addOnId: _i(j['addOnId'] ?? j['addonId']),
-        name: (j['name'] ?? '').toString(),
-        price: _d(j['price']),
-        durationMinutes: _i(j['durationMinutes']),
-        description: _s(j['description']),
-        isActive: _b(j['isActive'], true),
-        packageIds: ((j['packageIds'] ?? j['packages']) is List)
-            ? ((j['packageIds'] ?? j['packages']) as List).map((e) => e is Map ? _i(e['packageId']) : _i(e)).toList()
-            : const [],
-      );
+    addOnId: _i(j['addOnId'] ?? j['addonId']),
+    name: (j['name'] ?? '').toString(),
+    price: _d(j['price']),
+    durationMinutes: _i(j['durationMinutes']),
+    description: _s(j['description']),
+    isActive: _b(j['isActive'], true),
+    packageIds: ((j['packageIds'] ?? j['packages']) is List)
+        ? ((j['packageIds'] ?? j['packages']) as List).map((e) => e is Map ? _i(e['packageId']) : _i(e)).toList()
+        : const [],
+  );
 }
 
 // ───────────────────────── Service areas ─────────────────────────
 
-/// Area the artist travels to. Travel charge is `free`, `per_visit` or `per_km`.
+/// Area the artist travels to. Travel charge is `free`, `per_visit` or `per_km` (chargeAmount is ₹ per visit / ₹ per km).
 class ArtistServiceArea {
   final int serviceAreaId;
   final String city;
   final String travelChargeType; // free | per_visit | per_km
   final double travelCharge;
+  final double freeKm; // travel is free up to this many km (0 = none); the charge applies beyond it
   final bool isActive;
 
   const ArtistServiceArea({
@@ -85,16 +86,18 @@ class ArtistServiceArea {
     required this.city,
     this.travelChargeType = 'free',
     this.travelCharge = 0,
+    this.freeKm = 0,
     this.isActive = true,
   });
 
   factory ArtistServiceArea.fromJson(Map<String, dynamic> j) => ArtistServiceArea(
-        serviceAreaId: _i(j['areaId'] ?? j['serviceAreaId']),
-        city: (j['city'] ?? j['areaName'] ?? '').toString(),
-        travelChargeType: (j['travelChargeType'] ?? 'free').toString(),
-        travelCharge: _d(j['chargeAmount'] ?? j['travelCharge'] ?? j['travelChargeAmount']),
-        isActive: _b(j['isActive'], true),
-      );
+    serviceAreaId: _i(j['areaId'] ?? j['serviceAreaId']),
+    city: (j['city'] ?? j['areaName'] ?? '').toString(),
+    travelChargeType: (j['travelChargeType'] ?? 'free').toString(),
+    travelCharge: _d(j['chargeAmount'] ?? j['travelCharge'] ?? j['travelChargeAmount']),
+    freeKm: _d(j['freeKm'] ?? j['free_km'] ?? j['freeKilometres'] ?? j['freeDistanceKm']),
+    isActive: _b(j['isActive'], true),
+  );
 }
 
 // ───────────────────────── KYC documents ─────────────────────────
@@ -102,7 +105,7 @@ class ArtistServiceArea {
 /// Uploaded KYC / ID document. Number is returned masked; the file needs the Bearer header.
 class ArtistDocument {
   final int documentId;
-  final String documentType; // id_proof | address_proof | certification
+  final String documentType; // id_proof | pan | address_proof | certification
   final String? idType; // aadhaar | voter_id | passport | driving_licence
   final String? documentNumberMasked;
   final int? verificationStatusId; // map with GET /core/approval-status/get_all/ (pending | approved | rejected)
@@ -124,16 +127,16 @@ class ArtistDocument {
   });
 
   factory ArtistDocument.fromJson(Map<String, dynamic> j) => ArtistDocument(
-        documentId: _i(j['documentId']),
-        documentType: (j['documentType'] ?? 'id_proof').toString(),
-        idType: _s(j['idType']),
-        documentNumberMasked: _s(j['documentNumber'] ?? j['documentNumberMasked']),
-        verificationStatusId: j['verificationStatusId'] == null ? null : _i(j['verificationStatusId']),
-        verificationStatus: (j['verificationStatus'] ?? '').toString(),
-        rejectionReason: _s(j['rejectionReason']),
-        fileUrl: _s(j['fileUrl']),
-        hasBackFile: (j['backFileUrl'] ?? '').toString().isNotEmpty,
-      );
+    documentId: _i(j['documentId']),
+    documentType: (j['documentType'] ?? 'id_proof').toString(),
+    idType: _s(j['idType']),
+    documentNumberMasked: _s(j['documentNumber'] ?? j['documentNumberMasked']),
+    verificationStatusId: j['verificationStatusId'] == null ? null : _i(j['verificationStatusId']),
+    verificationStatus: (j['verificationStatus'] ?? '').toString(),
+    rejectionReason: _s(j['rejectionReason']),
+    fileUrl: _s(j['fileUrl']),
+    hasBackFile: (j['backFileUrl'] ?? '').toString().isNotEmpty,
+  );
 }
 
 // ───────────────────────── Payout account ─────────────────────────
@@ -157,13 +160,13 @@ class PayoutAccount {
   bool get isSaved => accountNumberMasked.isNotEmpty && ifscCode.isNotEmpty;
 
   factory PayoutAccount.fromJson(Map<String, dynamic> j) => PayoutAccount(
-        accountHolderName: (j['accountHolderName'] ?? j['bankAccountHolderName'] ?? '').toString(),
-        accountNumberMasked:
-            (j['bankAccountNumberMasked'] ?? j['accountNumberMasked'] ?? j['bankAccountNumber'] ?? '').toString(),
-        ifscCode: (j['ifscCode'] ?? '').toString(),
-        upiId: _s(j['upiId']),
-        verificationStatusId: j['verificationStatusId'] == null ? null : _i(j['verificationStatusId']),
-      );
+    accountHolderName: (j['accountHolderName'] ?? j['bankAccountHolderName'] ?? '').toString(),
+    accountNumberMasked:
+    (j['bankAccountNumberMasked'] ?? j['accountNumberMasked'] ?? j['bankAccountNumber'] ?? '').toString(),
+    ifscCode: (j['ifscCode'] ?? '').toString(),
+    upiId: _s(j['upiId']),
+    verificationStatusId: j['verificationStatusId'] == null ? null : _i(j['verificationStatusId']),
+  );
 }
 
 // ───────────────────────── Onboarding status ─────────────────────────
@@ -225,10 +228,10 @@ class ReviewFeedback {
   const ReviewFeedback({required this.decision, this.message, this.createdAt});
 
   factory ReviewFeedback.fromJson(Map<String, dynamic> j) => ReviewFeedback(
-        decision: (j['decision'] ?? '').toString(),
-        message: _s(j['message'] ?? j['reason'] ?? j['rejectionReason']),
-        createdAt: _s(j['createdAt']),
-      );
+    decision: (j['decision'] ?? '').toString(),
+    message: _s(j['message'] ?? j['reason'] ?? j['rejectionReason']),
+    createdAt: _s(j['createdAt']),
+  );
 }
 
 // ───────────────────────── Brands ─────────────────────────
@@ -253,10 +256,10 @@ class BrandRequest {
   const BrandRequest({required this.requestId, required this.name, this.status = 'pending'});
 
   factory BrandRequest.fromJson(Map<String, dynamic> j) => BrandRequest(
-        requestId: _i(j['requestId'] ?? j['brandRequestId']),
-        name: (j['name'] ?? j['brandName'] ?? '').toString(),
-        status: (j['status'] ?? 'pending').toString(),
-      );
+    requestId: _i(j['requestId'] ?? j['brandRequestId']),
+    name: (j['name'] ?? j['brandName'] ?? '').toString(),
+    status: (j['status'] ?? 'pending').toString(),
+  );
 }
 
 // ───────────────────────── Reviews / clients / insights ─────────────────────────
@@ -284,15 +287,15 @@ class ArtistReviewItem {
   });
 
   factory ArtistReviewItem.fromJson(Map<String, dynamic> j) => ArtistReviewItem(
-        reviewId: _i(j['reviewId']),
-        bookingId: j['bookingId'] == null ? null : _i(j['bookingId']),
-        rating: _i(j['rating']),
-        comment: _s(j['comment']),
-        customerName: _s(j['customerName']),
-        reply: _s(j['reply']),
-        repliedAt: _s(j['repliedAt']),
-        createdAt: _s(j['createdAt']),
-      );
+    reviewId: _i(j['reviewId']),
+    bookingId: j['bookingId'] == null ? null : _i(j['bookingId']),
+    rating: _i(j['rating']),
+    comment: _s(j['comment']),
+    customerName: _s(j['customerName']),
+    reply: _s(j['reply']),
+    repliedAt: _s(j['repliedAt']),
+    createdAt: _s(j['createdAt']),
+  );
 }
 
 /// Customer with a confirmed / started / completed booking. `note` is private to the artist.
@@ -314,13 +317,13 @@ class ArtistClient {
   });
 
   factory ArtistClient.fromJson(Map<String, dynamic> j) => ArtistClient(
-        customerId: _i(j['customerId']),
-        name: (j['name'] ?? j['customerName'] ?? '').toString(),
-        bookingCount: _i(j['bookingsCount'] ?? j['bookingCount'] ?? j['totalBookings']),
-        totalSpent: _d(j['totalSpent'] ?? j['lifetimeValue']),
-        lastBookingAt: _s(j['lastBookingDate'] ?? j['lastBookingAt']),
-        note: _s(j['note']),
-      );
+    customerId: _i(j['customerId']),
+    name: (j['name'] ?? j['customerName'] ?? '').toString(),
+    bookingCount: _i(j['bookingsCount'] ?? j['bookingCount'] ?? j['totalBookings']),
+    totalSpent: _d(j['totalSpent'] ?? j['lifetimeValue']),
+    lastBookingAt: _s(j['lastBookingDate'] ?? j['lastBookingAt']),
+    note: _s(j['note']),
+  );
 }
 
 /// GET /artists/insights/summary/ — bookings by status, repeat clients, most-booked services, profile views.
@@ -409,17 +412,17 @@ class RescheduleRequestItem {
   bool get isPending => status == 'pending';
 
   factory RescheduleRequestItem.fromJson(Map<String, dynamic> j) => RescheduleRequestItem(
-        requestId: _i(j['rescheduleId']),
-        bookingId: _i(j['bookingId']),
-        status: (j['status'] ?? 'pending').toString(),
-        previousDate: _s(j['previousDate']),
-        previousStartTime: _s(j['previousStartTime']),
-        proposedDate: _s(j['proposedDate']),
-        proposedStartTime: _s(j['proposedStartTime']),
-        reason: _s(j['reason']),
-        expiresAt: _s(j['expiresAt']),
-        createdAt: _s(j['createdAt']),
-      );
+    requestId: _i(j['rescheduleId']),
+    bookingId: _i(j['bookingId']),
+    status: (j['status'] ?? 'pending').toString(),
+    previousDate: _s(j['previousDate']),
+    previousStartTime: _s(j['previousStartTime']),
+    proposedDate: _s(j['proposedDate']),
+    proposedStartTime: _s(j['proposedStartTime']),
+    reason: _s(j['reason']),
+    expiresAt: _s(j['expiresAt']),
+    createdAt: _s(j['createdAt']),
+  );
 }
 
 // ───────────────────────── Support tickets ─────────────────────────
@@ -451,19 +454,19 @@ class SupportTicket {
   bool get isClosed => status == 'closed' || status == 'resolved';
 
   factory SupportTicket.fromJson(Map<String, dynamic> j) => SupportTicket(
-        ticketId: _i(j['ticketId']),
-        issueType: (j['issueType'] ?? 'other').toString(),
-        subject: (j['subject'] ?? '').toString(),
-        description: _s(j['description']),
-        status: (j['status'] ?? 'open').toString(),
-        bookingId: j['bookingId'] == null ? null : _i(j['bookingId']),
-        resolutionNote: _s(j['resolutionNote']),
-        attachments: ((j['attachments'] as List?) ?? const [])
-            .whereType<Map>()
-            .map((e) => TicketAttachment.fromJson(Map<String, dynamic>.from(e)))
-            .toList(),
-        createdAt: _s(j['createdAt']),
-      );
+    ticketId: _i(j['ticketId']),
+    issueType: (j['issueType'] ?? 'other').toString(),
+    subject: (j['subject'] ?? '').toString(),
+    description: _s(j['description']),
+    status: (j['status'] ?? 'open').toString(),
+    bookingId: j['bookingId'] == null ? null : _i(j['bookingId']),
+    resolutionNote: _s(j['resolutionNote']),
+    attachments: ((j['attachments'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => TicketAttachment.fromJson(Map<String, dynamic>.from(e)))
+        .toList(),
+    createdAt: _s(j['createdAt']),
+  );
 }
 
 /// Ticket attachment — private; fetch bytes with the Bearer header.
@@ -475,8 +478,8 @@ class TicketAttachment {
   const TicketAttachment({required this.attachmentId, this.fileName, this.url});
 
   factory TicketAttachment.fromJson(Map<String, dynamic> j) => TicketAttachment(
-        attachmentId: _i(j['attachmentId']),
-        fileName: _s(j['fileName']),
-        url: _s(j['url'] ?? j['fileUrl']),
-      );
+    attachmentId: _i(j['attachmentId']),
+    fileName: _s(j['fileName']),
+    url: _s(j['url'] ?? j['fileUrl']),
+  );
 }

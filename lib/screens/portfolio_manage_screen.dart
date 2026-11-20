@@ -7,6 +7,7 @@
 //   POST /artists/portfolio/create/
 //   DELETE /artists/portfolio/delete/
 
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -21,9 +22,11 @@ import '../models/enums/media_type_enum.dart';
 import '../utils/app_feedback.dart';
 import '../utils/service_locator.dart';
 import '../utils/media_url.dart';
+import '../utils/video_limits.dart';
 import 'portfolio_detail_screen.dart';
 import 'onboarding/artist_page_services_steps.dart' show kMakeupTypeCategory;
 import '../utils/api_logger.dart';
+import '../widgets/video_viewer.dart';
 
 /// SCREEN: Portfolio — grid of photos/videos, upload, reorder, open detail.
 class PortfolioManageScreen extends StatefulWidget {
@@ -43,6 +46,9 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
   List<ServiceSubCategory> _subCategories = [];
 
   int? _sharingId;
+
+  /// While a video is still being processed by the server, the list is re-read every few seconds.
+  Timer? _processingPoll;
 
   /// Categories the artist can pick for a photo: active ones, without the helper "Makeup Type" rows
   /// (HD / Airbrush share names with real services and only confuse the list).
@@ -64,13 +70,35 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
     _load();
   }
 
-  /// Loads this screen's data.
-  /// Uses 2 APIs (see inline notes).
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
+  /// Frees the timer when the screen closes.
+  @override
+  void dispose() {
+    _processingPoll?.cancel();
+    super.dispose();
+  }
+
+  /// Starts / stops the background re-read depending on whether a video is still processing.
+  void _syncProcessingPoll() {
+    final anyProcessing = _items.any((p) => p.isProcessing);
+    if (!anyProcessing) {
+      _processingPoll?.cancel();
+      _processingPoll = null;
+      return;
+    }
+    _processingPoll ??= Timer.periodic(const Duration(seconds: 8), (_) {
+      if (mounted) _load(silent: true);
     });
+  }
+
+  /// Loads this screen's data.
+  /// Uses 2 APIs (see inline notes). [silent] = background refresh without the spinner.
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final results = await Future.wait([
         // API call: artistService.getAllPortfolios → GET /artists/portfolio/get_all/
@@ -84,8 +112,9 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
         _subCategories = results[1].data as List<ServiceSubCategory>;
         _loading = false;
       });
+      _syncProcessingPoll();
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || silent) return;
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '');
         _loading = false;
@@ -96,13 +125,51 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
   /// Adds the item.
   /// API: artistService.createPortfolio → POST /artists/portfolio/create/
   Future<void> _add() async {
-    final xfile = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85,
+    // Photo or video? (Videos are shrunk by the server — up to 300 MB and 90 seconds, see VideoLimits.)
+    final isVideo = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: AiraColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 12, 8, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_outlined, color: AiraColors.roseDeep),
+                title: const Text('Add Photo'),
+                onTap: () => Navigator.pop(ctx, false),
+              ),
+              ListTile(
+                leading: const Icon(Icons.videocam_outlined, color: AiraColors.roseDeep),
+                title: const Text('Add Video'),
+                subtitle: const Text('Up To 90 Seconds'),
+                onTap: () => Navigator.pop(ctx, true),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
+    if (isVideo == null || !mounted) return;
+
+    // The original file is sent as it is — the server shrinks it (photo up to 25 MB).
+    final XFile? xfile = isVideo
+        ? await ImagePicker().pickVideo(source: ImageSource.gallery, maxDuration: VideoLimits.maxDuration)
+        : await ImagePicker().pickImage(source: ImageSource.gallery);
 
     if (xfile == null) return;
     if (!mounted) return;
+
+    if (isVideo) {
+      final problem = await VideoLimits.problem(xfile);
+      if (problem != null) {
+        if (mounted) AppFeedback.showInfo(context, problem);
+        return;
+      }
+      if (!mounted) return;
+    }
 
     final pickable = _pickableSubCategories;
     int? subCategoryId = pickable.isNotEmpty ? pickable.first.subCategoryId : null;
@@ -219,7 +286,7 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
       // API call: artistService.createPortfolio → POST /artists/portfolio/create/
       await ServiceLocator.artistService.createPortfolio(
         CreatePortfolio(
-          mediaType: MediaTypeEnum.image,
+          mediaType: isVideo ? MediaTypeEnum.video : MediaTypeEnum.image,
           subCategoryId: subCategoryId ?? 1,
           file: xfile,
           caption: captionCtrl.text.trim().isEmpty
@@ -233,7 +300,7 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
       if (mounted) {
         AppFeedback.showSuccess(
           context,
-          'Added To Your Portfolio ✓',
+          isVideo ? 'Video Uploaded ✓ It Will Be Ready After Processing.' : 'Added To Your Portfolio ✓',
         );
       }
     } catch (e) {
@@ -305,123 +372,189 @@ class _PortfolioManageScreenState extends State<PortfolioManageScreen> {
   @override
   Widget build(BuildContext context) {
     final Widget content = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-              child: Row(
-                children: [
-                  if (!widget.embedded) ...[
-                    SunndariBackChip(onTap: () => Navigator.of(context).pop()),
-                    const SizedBox(width: 12),
-                  ],
-                  Expanded(
-                    child: Text('Portfolio', style: AiraText.serif(fontSize: 19, fontWeight: FontWeight.w600)),
-                  ),
-                  PrimaryButton(
-                    label: _uploading ? 'Uploading…' : 'Add',
-                    small: true,
-                    icon: Icons.add,
-                    onTap: _uploading ? null : _add,
-                  ),
-                ],
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+          child: Row(
+            children: [
+              if (!widget.embedded) ...[
+                SunndariBackChip(onTap: () => Navigator.of(context).pop()),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
+                child: Text('Portfolio', style: AiraText.serif(fontSize: 19, fontWeight: FontWeight.w600)),
               ),
+              PrimaryButton(
+                label: _uploading ? 'Uploading…' : 'Add',
+                small: true,
+                icon: Icons.add,
+                onTap: _uploading ? null : _add,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: AiraColors.rose))
+              : _error != null
+              ? AiraErrorState(message: _error!, onRetry: _load)
+              : _items.isEmpty
+              ? Center(
+            child: Text('No Portfolio Items Yet — Tap Add To Upload Your Photos Or Videos.',
+                textAlign: TextAlign.center,
+                style: AiraText.sans(fontSize: 13.5, color: AiraColors.charcoalSoft)),
+          )
+              : GridView.builder(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.82,
             ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: AiraColors.rose))
-                  : _error != null
-                  ? AiraErrorState(message: _error!, onRetry: _load)
-                  : _items.isEmpty
-                  ? Center(
-                child: Text('No Portfolio Items Yet — Tap Add To Upload Your Work.',
-                    textAlign: TextAlign.center,
-                    style: AiraText.sans(fontSize: 13.5, color: AiraColors.charcoalSoft)),
-              )
-                  : GridView.builder(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 0.82,
-                ),
-                itemCount: _items.length,
-                itemBuilder: (context, i) {
-                  final p = _items[i];
-                  final sharingThis = _sharingId == p.portfolioId;
-                  return GestureDetector(
-                    onTap: () async {
-                      // Navigates to PortfolioDetailScreen
-                      final changed = await Navigator.of(context).push<bool>(
-                        MaterialPageRoute(builder: (_) => PortfolioDetailScreen(portfolio: p)),
-                      );
-                      if (changed == true) _load();
-                    },
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(18),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Image.network(
-                            resolveMediaUrl(p.fileUrl) ?? '',
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(color: AiraColors.blush),
-                          ),
-                          Positioned(
-                            top: 6,
-                            left: 6,
-                            child: GestureDetector(
-                              onTap: sharingThis ? null : () => _share(p),
-                              child: Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
-                                child: sharingThis
-                                    ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                )
-                                    : const Icon(Icons.ios_share, size: 14, color: Colors.white),
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            top: 6,
-                            right: 6,
-                            child: GestureDetector(
-                              onTap: () => _delete(p),
-                              child: Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
-                                child: const Icon(Icons.close, size: 14, color: Colors.white),
-                              ),
-                            ),
-                          ),
-                          if (_categoryLabel(p).isNotEmpty)
-                            Positioned(
-                              left: 0,
-                              right: 0,
-                              bottom: 0,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                                color: Colors.black38,
-                                child: Text(_categoryLabel(p),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: AiraText.sans(fontSize: 11, color: Colors.white)),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
+            itemCount: _items.length,
+            itemBuilder: (context, i) {
+              final p = _items[i];
+              final sharingThis = _sharingId == p.portfolioId;
+              final isVideo = p.mediaType.toLowerCase().contains('video');
+              return GestureDetector(
+                onTap: () async {
+                  if (isVideo && p.isProcessing) {
+                    AppFeedback.showInfo(context, 'This Video Is Still Being Processed. It Will Be Ready Shortly.');
+                    return;
+                  }
+                  if (isVideo && p.processingFailed) {
+                    AppFeedback.showWarning(
+                        context, p.processingError ?? 'We Could Not Process This Video. Please Try Another File.');
+                    return;
+                  }
+                  if (isVideo) {
+                    // Videos play in the full-screen player (the detail screen is for photos).
+                    final videoUrl = resolveMediaUrl(p.fileUrl);
+                    if (videoUrl != null) await showVideoViewer(context, url: videoUrl, title: p.caption);
+                    return;
+                  }
+                  // Navigates to PortfolioDetailScreen
+                  final changed = await Navigator.of(context).push<bool>(
+                    MaterialPageRoute(builder: (_) => PortfolioDetailScreen(portfolio: p)),
                   );
+                  if (changed == true) _load();
                 },
-              ),
-            ),
-          ],
-        );
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (isVideo)
+                        Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            if ((resolveMediaUrl(p.posterUrl ?? '') ?? '').isNotEmpty)
+                              Image.network(
+                                resolveMediaUrl(p.posterUrl!)!,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Container(color: AiraColors.blush),
+                              )
+                            else
+                              Container(color: AiraColors.blush),
+                            Center(
+                              child: p.isProcessing
+                                  ? Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(
+                                    width: 26,
+                                    height: 26,
+                                    child: CircularProgressIndicator(strokeWidth: 2.4, color: AiraColors.rose),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text('Processing…',
+                                      style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoal)),
+                                ],
+                              )
+                                  : p.processingFailed
+                                  ? Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.error_outline, size: 32, color: AiraColors.errorText),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      p.processingError ?? 'Could Not Process This Video',
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: AiraText.sans(fontSize: 11, color: AiraColors.errorText),
+                                    ),
+                                  ],
+                                ),
+                              )
+                                  : const Icon(Icons.play_circle_fill_rounded, size: 48, color: AiraColors.rose),
+                            ),
+                          ],
+                        )
+                      else
+                        Image.network(
+                          resolveMediaUrl(p.fileUrl) ?? '',
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(color: AiraColors.blush),
+                        ),
+                      Positioned(
+                        top: 6,
+                        left: 6,
+                        child: GestureDetector(
+                          onTap: sharingThis ? null : () => _share(p),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                            child: sharingThis
+                                ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                                : const Icon(Icons.ios_share, size: 14, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 6,
+                        right: 6,
+                        child: GestureDetector(
+                          onTap: () => _delete(p),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                            child: const Icon(Icons.close, size: 14, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                      if (_categoryLabel(p).isNotEmpty)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                            color: Colors.black38,
+                            child: Text(_categoryLabel(p),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AiraText.sans(fontSize: 11, color: Colors.white)),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
     if (widget.embedded) return content;
     return Scaffold(
       backgroundColor: AiraColors.bg,

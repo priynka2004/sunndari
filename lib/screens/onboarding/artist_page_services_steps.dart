@@ -41,6 +41,12 @@ abstract class ArtistPageStep {
 /// Backend category that holds the makeup types (Regular / HD / Airbrush ...).
 const kMakeupTypeCategory = 'Makeup Type';
 
+/// Single-treatment services (Eye Makeup Only, Eyebrow Shaping / Tinting …). They are not makeup styles, so they are
+/// kept out of the Specialities list and the makeup-package Service list.
+const kAdditionalServicesCategory = 'Additional Services';
+bool isAdditionalServiceSub(ServiceSubCategory s) =>
+    (s.categoryName ?? '').trim().toLowerCase() == kAdditionalServicesCategory.toLowerCase();
+
 /// Shown only while the backend has no brands (GET /core/brands/get_all/ returns an empty list).
 const kBrandsIfServerEmpty = [
   'M·A·C',
@@ -172,7 +178,7 @@ class ServicesPricingStepState extends State<ServicesPricingStep> implements Art
       final r = await ServiceLocator.coreService.getAllServiceSubCategories(limit: 100);
       allSubRows = r.data;
       _subs = r.data
-          .where((s) => s.isActive && (s.categoryName ?? '').trim().toLowerCase() != kMakeupTypeCategory.toLowerCase())
+          .where((s) => s.isActive && (s.categoryName ?? '').trim().toLowerCase() != kMakeupTypeCategory.toLowerCase() && !isAdditionalServiceSub(s))
           .toList();
     } catch (_) {}
     await _ensureEditedSubLoaded();
@@ -239,10 +245,10 @@ class ServicesPricingStepState extends State<ServicesPricingStep> implements Art
   }
 
   static String _brandStatusLabel(String s) => switch (s.trim().toLowerCase()) {
-        'approved' => 'Added',
-        'rejected' => 'Not Added',
-        _ => 'Waiting For Approval',
-      };
+    'approved' => 'Added',
+    'rejected' => 'Not Added',
+    _ => 'Waiting For Approval',
+  };
 
   /// Removes the current cover photo of the package being edited.
   /// API: artistBusiness.deletePackagePhoto → DELETE /artists/packages/photo/delete/
@@ -639,13 +645,13 @@ class ServicesPricingStepState extends State<ServicesPricingStep> implements Art
         AppFeedback.showInfo(context, 'You Can Add Up To $_maxPhotos Photos Per Service');
         return;
       }
-      final picked = await ImagePicker().pickMultiImage(imageQuality: 85);
+      final picked = await ImagePicker().pickMultiImage(); // originals — the server shrinks them (up to 25 MB each)
       if (picked.isEmpty) return;
       final added = <XFile>[];
       var tooBig = 0;
       for (final x in picked) {
         if (_photos.any((e) => e.path == x.path)) continue;
-        if (await x.length() > 5 * 1024 * 1024) {
+        if (await x.length() > 25 * 1024 * 1024) {
           tooBig++;
           continue;
         }
@@ -654,7 +660,7 @@ class ServicesPricingStepState extends State<ServicesPricingStep> implements Art
       if (!mounted) return;
       setState(() => _photos.addAll(added));
       if (tooBig > 0) {
-        AppFeedback.showWarning(context, '$tooBig Photo${tooBig == 1 ? '' : 's'} Skipped (Over 5 MB). Please Choose Smaller Photos.');
+        AppFeedback.showWarning(context, '$tooBig Photo${tooBig == 1 ? '' : 's'} Skipped (Over 25 MB). Please Choose Smaller Photos.');
       } else if (picked.length > room) {
         AppFeedback.showInfo(context, 'Only $_maxPhotos Photos Can Be Added Per Service');
       }
@@ -729,15 +735,15 @@ class ServicesPricingStepState extends State<ServicesPricingStep> implements Art
                 value: _category,
                 onTap: () async {
                   final v = await showSunndariChoiceSheet(context,
-                      title: 'Choose A Service',
-                      subtitle: 'Select One For This Service.',
-                      options: _serviceOptions,
-                      selected: _category,
-                      // No "Other / Add Your Own Service" here on purpose: a typed-in name has no service id on the
-                      // server (so saving always failed with "not available") and free-text names bring spelling
-                      // mistakes. Special-occasion services (Karwa Chauth, Diwali, New Year…) are opened by the admin
-                      // from the backend and then simply appear in this list.
-                      );
+                    title: 'Choose A Service',
+                    subtitle: 'Select One For This Service.',
+                    options: _serviceOptions,
+                    selected: _category,
+                    // No "Other / Add Your Own Service" here on purpose: a typed-in name has no service id on the
+                    // server (so saving always failed with "not available") and free-text names bring spelling
+                    // mistakes. Special-occasion services (Karwa Chauth, Diwali, New Year…) are opened by the admin
+                    // from the backend and then simply appear in this list.
+                  );
                   if (v != null) setState(() => _category = v);
                 },
               ),

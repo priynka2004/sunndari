@@ -78,6 +78,13 @@ class BookingStats {
   double get totalEarnings =>
       bookings.where(_countsTowardEarnings).fold(0.0, (sum, b) => sum + b.totalAmount);
 
+  /// NET earnings (gross − platform fee). Uses the exact net / fee the server sent for each booking and falls back
+  /// to the artist's commission rate only for older bookings that have none.
+  double netEarnings(double commissionRate) => bookings.where(_countsTowardEarnings).fold(0.0, (sum, b) {
+        final fee = b.platformFee ?? (b.totalAmount * commissionRate / 100);
+        return sum + (b.netAmount ?? (b.totalAmount - fee));
+      });
+
   /// Week earnings.
   double get weekEarnings {
     final start = _startOfWeek;

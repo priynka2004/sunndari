@@ -1,18 +1,34 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Location (request at runtime) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Notifications (POST_NOTIFICATIONS must be requested at runtime on Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Only needed for exact scheduled notifications (flutter_local_notifications) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
         android:name="${applicationName}"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="Sunndari Artist">
+        android:label="Sunndari Artist"
+        android:usesCleartextTraffic="false">
+
+        <!-- Google Maps API key: must live under <application>, not <activity> -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyB_-uOyQimLqBkDW_Vr8d88GX6Qk0lyksI" />
+
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
@@ -22,39 +38,68 @@
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:windowSoftInputMode="adjustResize">
+
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
+
+            <!-- false = you handle links yourself (e.g. app_links / uni_links) -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false" />
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!--  Shared profile link: sunndari://app/profile?id=123 opens Public Profile Preview  -->
-            <meta-data
-                android:name="flutter_deeplinking_enabled"
-                android:value="false" />
+
+            <!-- Custom scheme: sunndari://app/profile?id=123 opens Public Profile Preview -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
-
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-
                 <data
                     android:host="app"
                     android:scheme="sunndari" />
             </intent-filter>
+
+            <!-- Optional: verified https App Links (needs assetlinks.json on your domain)
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="sunndari.com"
+                    android:pathPrefix="/profile"
+                    android:scheme="https" />
+            </intent-filter>
+            -->
         </activity>
-        <!--  Don't delete the meta-data below.
-                     This is used by the Flutter tool to generate GeneratedPluginRegistrant.java  -->
+
+        <!-- Receivers required by flutter_local_notifications (scheduled + after reboot).
+             Remove if you don't use that plugin. -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
+            android:exported="false" />
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
-    <!--  Required to query activities that can process text, see:
-             https://developer.android.com/training/package-visibility and
-             https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
 
-             In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin.  -->
+    <!-- Required to query activities that can process text (Flutter ProcessTextPlugin) -->
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT" />

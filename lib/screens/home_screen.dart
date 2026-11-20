@@ -11,6 +11,8 @@ import '../widgets/common.dart';
 import 'business_details_screen.dart';
 import '../utils/service_locator.dart';
 import 'edit_profile_screen.dart';
+import 'onboarding/registration_fee_screen.dart';
+import '../utils/accepting_bookings.dart';
 
 /// SCREEN: Home tab ("My Business") — accepting-bookings switch, profile-complete nudge, business overview numbers, quick actions.
 class HomeScreen extends StatefulWidget {
@@ -32,6 +34,8 @@ class HomeScreen extends StatefulWidget {
   final String? profileHint;
   final List<BookingSlot> todaysBookings; // New parameter for today's schedule
   final bool acceptingBookings; // current Accept Booking switch value from the profile
+  final bool acceptingLockedByAdmin; // an admin switched bookings off → only support can turn them back on
+  final bool registrationEligible; // registration fee paid or exempt
 
   const HomeScreen({
     super.key,
@@ -51,7 +55,9 @@ class HomeScreen extends StatefulWidget {
     this.onCompleteProfile,
     this.profileHint,
     this.todaysBookings = const [], // Default to empty list
-    this.acceptingBookings = true,
+    this.acceptingBookings = false,
+    this.acceptingLockedByAdmin = false,
+    this.registrationEligible = true,
   });
 
   @override
@@ -61,6 +67,15 @@ class HomeScreen extends StatefulWidget {
 /// State of [HomeScreen] — holds the screen data and logic.
 class _HomeScreenState extends State<HomeScreen> {
   late bool _accepting = widget.acceptingBookings;
+  late bool _feePending = !widget.registrationEligible; // registration fee still to be paid → bookings stay switched off
+
+  @override
+  void initState() {
+    super.initState();
+    pendingRegistrationFee().then((f) {
+      if (mounted && f != null) setState(() => _feePending = true);
+    });
+  }
 
   @override
   void didUpdateWidget(covariant HomeScreen old) {
@@ -71,36 +86,44 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Turns new bookings on / off (same switch as Profile).
   /// API: artistBusiness.setAcceptingBookings → PUT /artists/profile/accepting_bookings/
   Future<void> _toggleAccepting(bool v) async {
-    final before = _accepting;
-    setState(() => _accepting = v);
-    try {
-      await ServiceLocator.artistBusiness.setAcceptingBookings(v);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _accepting = before);
-        AppFeedback.showError(context, e);
-      }
-    }
+    // Handles: admin lock, unpaid fee, waiting for approval and every server message (see accepting_bookings.dart).
+    final ok = await changeAcceptingBookings(context, v, lockedByAdmin: widget.acceptingLockedByAdmin);
+    if (!mounted || !ok) return;
+    setState(() {
+      _accepting = v;
+      if (v) _feePending = false;
+    });
   }
 
   /// UI piece: Accept Booking toggle card.
-  Widget _acceptToggle() => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-    child: AiraCard(
-      padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
-      child: SwitchListTile(
-        contentPadding: EdgeInsets.zero,
-        activeColor: AiraColors.rose,
-        title: Text('Accepting New Bookings',
-            style: AiraText.sans(fontSize: 15, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
-        subtitle: Text(
-          _accepting ? 'Clients Can Find And Book You.' : 'Hidden From Search. Existing Bookings Are Not Affected.',
-          style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft),
+  Widget _acceptToggle() => ValueListenableBuilder<bool?>(
+    valueListenable: acceptingBookingsNotifier,
+    builder: (context, shared, _) {
+      final accepting = shared ?? _accepting; // same value as the Profile switch
+      final feePending = _feePending && shared != true; // switched on = the fee is already sorted
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+        child: AiraCard(
+          padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+          child: SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            activeColor: AiraColors.rose,
+            title: Text('Accepting New Bookings',
+                style: AiraText.sans(fontSize: 15, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
+            subtitle: Text(
+              widget.acceptingLockedByAdmin
+                  ? 'Switched Off By Sunndari Support. Contact Support To Turn Bookings Back On.'
+                  : feePending
+                  ? 'Pay The Registration Fee To Start Accepting Bookings.'
+                  : (accepting ? 'Clients Can Find And Book You.' : 'Hidden From Search. Existing Bookings Are Not Affected.'),
+              style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft),
+            ),
+            value: accepting && !feePending && !widget.acceptingLockedByAdmin,
+            onChanged: _toggleAccepting,
+          ),
         ),
-        value: _accepting,
-        onChanged: _toggleAccepting,
-      ),
-    ),
+      );
+    },
   );
 
   static const _monthNames = [
@@ -126,10 +149,12 @@ class _HomeScreenState extends State<HomeScreen> {
     if (s.status == SlotStatus.inProgress && s.isPastDate) {
       return ('Needs Support', AiraColors.errorBg, AiraColors.errorText);
     }
+    if (s.paymentInProgress) return ('Payment In Progress', AiraColors.goldSoft, const Color(0xFF8A6A1F));
     return switch (s.status) {
       SlotStatus.confirmed => ('Confirmed', green, AiraColors.success),
       SlotStatus.inProgress => ('In Progress', green, AiraColors.success),
-      SlotStatus.completed => ('Completed', green, AiraColors.success),
+    // The server's own words ("Completed and Payment Received" only when paid); plain "Completed" otherwise.
+      SlotStatus.completed => ((s.statusLabel ?? '').isNotEmpty ? s.statusLabel! : 'Completed', green, AiraColors.success),
       SlotStatus.noShow => ('No Show', AiraColors.pinkFill, AiraColors.roseDeep),
       SlotStatus.cancelled => ('Cancelled', AiraColors.pinkFill, AiraColors.roseDeep),
       _ => ('Pending', AiraColors.pinkFill, AiraColors.roseDeep),

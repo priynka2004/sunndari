@@ -156,6 +156,36 @@ class _CityPickerSheetState extends State<_CityPickerSheet> {
   Future<void> _fetchRemote(String query) async {
     setState(() => _loading = true);
     try {
+      if (!GooglePlacesConfig.isSet) return; // no key pasted yet → the built-in city list is used
+      if (GooglePlacesConfig.useNewPlacesApi) {
+        // Places API (New): POST https://places.googleapis.com/v1/places:autocomplete
+        final res = await ApiLog.post(
+          Uri.parse('https://places.googleapis.com/v1/places:autocomplete'),
+          headers: {'Content-Type': 'application/json', 'X-Goog-Api-Key': GooglePlacesConfig.apiKey},
+          body: jsonEncode({'input': query, 'includedPrimaryTypes': ['(cities)'], 'includedRegionCodes': ['in']}),
+          tag: 'HTTP/places-autocomplete',
+        );
+        if (res.statusCode != 200) {
+          ApiLog.info('Places', 'city autocomplete (new) failed: ${res.statusCode}');
+          return;
+        }
+        final d = jsonDecode(res.body);
+        String t(dynamic o) => o is Map ? (o['text'] ?? '').toString() : '';
+        final fromNew = (d is Map ? (d['suggestions'] as List? ?? const []) : const [])
+            .whereType<Map>()
+            .map((s) {
+              final p = s['placePrediction'];
+              if (p is! Map) return null;
+              final sf = p['structuredFormat'] is Map ? p['structuredFormat'] as Map : const {};
+              final main = t(sf['mainText']).isNotEmpty ? t(sf['mainText']) : t(p['text']);
+              return IndianCity(main, t(sf['secondaryText']));
+            })
+            .whereType<IndianCity>()
+            .where((c) => c.name.isNotEmpty)
+            .toList();
+        if (mounted && query == _query.trim()) setState(() => _remote = fromNew);
+        return;
+      }
       final url = Uri.parse(
         'https://maps.googleapis.com/maps/api/place/autocomplete/json'
         '?input=${Uri.encodeQueryComponent(query)}'

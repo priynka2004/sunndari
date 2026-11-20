@@ -1,5 +1,5 @@
 // FILE: screens/business_details_screen.dart
-// SCREEN: Business — tabs: Locations | Portfolio | KYC.  +  SCREEN: Edit & Add Service — Services & Pricing only.
+// SCREEN: Business — tabs: Locations | Salons | Portfolio | KYC.  +  SCREEN: Edit & Add Service — Services & Pricing only.
 
 import 'package:flutter/material.dart';
 import '../theme/tokens.dart';
@@ -7,6 +7,7 @@ import '../widgets/common.dart';
 import 'business_setup_screen.dart';
 import 'kyc_bank_details_screen.dart';
 import 'portfolio_manage_screen.dart';
+import 'salon_addresses_screen.dart';
 import 'onboarding/artist_page_services_steps.dart' show ExtraServicesStep, ExtraServicesStepState;
 import '../utils/app_feedback.dart';
 
@@ -23,7 +24,7 @@ class BusinessDetailsScreen extends StatefulWidget {
 class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   late String _tab = widget.initialTab == 'package' ? 'setup' : widget.initialTab;
 
-  static const _keys = ['setup', 'portfolio', 'kyc'];
+  static const _keys = ['setup', 'salons', 'portfolio', 'kyc'];
 
   /// Builds the UI.
   @override
@@ -41,6 +42,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
             AiraSegTabs(
               tabs: const [
                 SegTabItem('setup', 'Locations'),
+                SegTabItem('salons', 'Salons'),
                 SegTabItem('portfolio', 'Portfolio'),
                 SegTabItem('kyc', 'KYC'),
               ],
@@ -52,6 +54,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                 index: index,
                 children: const [
                   BusinessSetupScreen(embedded: true, only: 'locations'),
+                  SalonAddressesScreen(embedded: true),
                   PortfolioManageScreen(embedded: true),
                   KycBankDetailsScreen(embedded: true),
                 ],

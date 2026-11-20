@@ -4,6 +4,9 @@
 //   The slot of the booking being rescheduled ([excludeBookingId]) is treated as free (old slot available).
 //
 // APIs used (read only):
+//   GET /artists/availability/slots/   (the times come from the server, on a 30-minute grid)
+//   GET /artists/bookings/get/         (package of the booking being rescheduled)
+// Only if the slots call fails, the old local calculation is used:
 //   GET /artists/availability/schedule/get_all/
 //   GET /artists/availability/block/get_all/
 //   GET /artists/bookings/get_all/
@@ -51,6 +54,8 @@ class _AvailableSlotsPickerState extends State<AvailableSlotsPicker> {
   final List<List<int>> _blocks = []; // [start, end] minutes; full day = [0, 1440]
   final List<List<int>> _booked = [];
   int _duration = 60; // length of the booking being rescheduled (minutes)
+  Set<int>? _serverStarts; // start times the server says can be booked right now (null = server call failed)
+  bool _serverDayBlocked = false;
 
   @override
   void initState() {
@@ -79,7 +84,81 @@ class _AvailableSlotsPickerState extends State<AvailableSlotsPicker> {
 
   List<dynamic> _list(dynamic j) => j is List ? j : (j is Map && j['data'] is List ? j['data'] as List : const []);
 
+  /// Minutes from a server range such as {startTime: "09:00:00", endTime: "10:30:00"}.
+  List<int>? _range(dynamic r) {
+    if (r is! Map) return null;
+    final st = _min(r['startTime'] ?? r['start_time'] ?? r['start']);
+    final en = _min(r['endTime'] ?? r['end_time'] ?? r['end']);
+    return st == null || en == null ? null : [st, en];
+  }
+
+  /// Asks the server for the day (same code customers use), so both apps always agree.
+  /// Returns false when the call fails — then the local calculation below is used.
+  Future<bool> _loadFromServer() async {
+    try {
+      int? packageId, locationTypeId;
+      var addonIds = <int>[];
+      var duration = widget.durationMinutes;
+      if (widget.excludeBookingId != null) {
+        try {
+          final b = await ServiceLocator.bookingService.getBooking(widget.excludeBookingId!, paidOnly: false);
+          packageId = b.packageId;
+          locationTypeId = b.locationTypeId;
+          addonIds = b.addons.map((a) => a.addOnId).toList();
+        } catch (_) {}
+      }
+      final d = await ServiceLocator.artistService.getAvailabilitySlots(
+        date: widget.date,
+        packageId: packageId,
+        addonIds: addonIds,
+        locationTypeId: locationTypeId,
+      );
+      if (d.isEmpty) return false;
+      final starts = <int>{};
+      for (final s in _list(d['availableSlots'])) {
+        final m = _min(s is Map ? (s['startTime'] ?? s['start_time']) : s);
+        if (m != null) starts.add(m);
+      }
+      int? ws, we;
+      final w = d['workingWindow'];
+      if (w is Map) {
+        ws = _min(w['startTime']);
+        we = _min(w['endTime']);
+      }
+      final blocks = <List<int>>[], booked = <List<int>>[];
+      for (final r in _list(d['blockedRanges'])) {
+        final x = _range(r);
+        if (x != null) blocks.add(x);
+      }
+      for (final r in _list(d['bookedRanges'])) {
+        final x = _range(r);
+        if (x != null) booked.add(x);
+      }
+      duration ??= (d['durationMinutes'] as num?)?.toInt() ?? 60;
+      if (!mounted) return true;
+      setState(() {
+        _serverStarts = starts;
+        _serverDayBlocked = d['isBlocked'] == true;
+        _workStart = ws;
+        _workEnd = we;
+        _duration = duration!;
+        _blocks
+          ..clear()
+          ..addAll(blocks);
+        _booked
+          ..clear()
+          ..addAll(booked);
+        _loading = false;
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _load() async {
+    if (await _loadFromServer()) return;
+    _serverStarts = null;
     final iso = _iso(widget.date);
     final dow = widget.date.weekday - 1;
     int? ws, we;
@@ -134,6 +213,14 @@ class _AvailableSlotsPickerState extends State<AvailableSlotsPicker> {
 
   _S _state(int s) {
     final e = s + _duration;
+    final server = _serverStarts;
+    if (server != null) {
+      // Server mode: a time is bookable only when the server lists it. Why not, is only used for the colour.
+      if (server.contains(s)) return _S.available;
+      if (_serverDayBlocked || _overlap(_blocks, s, e)) return _S.blocked;
+      if (_overlap(_booked, s, e)) return _S.booked;
+      return _S.closed;
+    }
     final now = DateTime.now();
     final isToday = widget.date.year == now.year && widget.date.month == now.month && widget.date.day == now.day;
     if (_workStart == null || _workEnd == null || s < _workStart! || e > _workEnd!) return _S.closed;
@@ -172,7 +259,10 @@ class _AvailableSlotsPickerState extends State<AvailableSlotsPicker> {
       return Text('The Artist Is Not Working On This Day.',
           style: AiraText.sans(fontSize: 13.5, color: AiraColors.charcoalSoft));
     }
-    final starts = <int>[for (var m = _workStart!; m + 60 <= _workEnd!; m += 60) m];
+    // The server uses a 30-minute grid (an appointment can start only on the hour or half hour).
+    final starts = _serverStarts != null
+        ? <int>[for (var m = _workStart!; m + 30 <= _workEnd!; m += 30) m]
+        : <int>[for (var m = _workStart!; m + 60 <= _workEnd!; m += 60) m];
     if (starts.isEmpty) {
       return Text('No Slots On This Day.', style: AiraText.sans(fontSize: 13.5, color: AiraColors.charcoalSoft));
     }

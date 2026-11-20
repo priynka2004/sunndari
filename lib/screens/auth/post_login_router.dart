@@ -14,6 +14,7 @@ import '../../utils/onboarding_progress.dart';
 import '../../utils/service_locator.dart';
 import '../onboarding/artist_page_setup_screen.dart';
 import '../onboarding/onboarding_flow_screen.dart';
+import '../onboarding/registration_fee_screen.dart';
 import 'registration_status_screen.dart';
 
 /// Two admin approvals:
@@ -41,6 +42,9 @@ Future<Widget> resolvePostAuthScreen() async {
   }
 
   if (kind == ApprovalStatusKind.approved) {
+    // Registration fee not paid yet (and not exempt) → the fee screen stays the only screen until it is paid.
+    final fee = kRegistrationFeeBeforeSubmit ? await pendingRegistrationFee() : null;
+    if (fee != null) return RegistrationFeeScreen(fee: fee, standalone: true);
     // Approval 1 done → build the page; then wait for approval 2 (portfolio) before the app opens.
     if (await ArtistPageSetup.needed(profile: profile)) return const ArtistPageSetupScreen();
     if (await ArtistPageReview.pending()) return const ArtistPageUnderReviewScreen();

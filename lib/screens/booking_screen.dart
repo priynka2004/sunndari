@@ -212,15 +212,18 @@ class _BookingScreenState extends State<BookingScreen> {
       return _reschedules[s.bookingId]!.fromCustomer ? 'Reschedule Request' : 'Reschedule Requested';
     }
     if (s.status == SlotStatus.confirmed && s.isFutureDate) return 'Upcoming';
+    if (s.paymentInProgress) return 'Payment In Progress';
+    // The server's own words for the status ("Completed and Payment Received" only when paid, …).
+    if ((s.statusLabel ?? '').isNotEmpty) return s.statusLabel!;
     return _statusLabel(s.status);
   }
 
   /// Display status bg.
   Color _displayStatusBg(BookingSlot s) =>
-      _isMissed(s) ? AiraColors.errorBg : (_hasPendingReschedule(s) ? AiraColors.goldSoft : _statusBg(s.status));
+      _isMissed(s) ? AiraColors.errorBg : ((_hasPendingReschedule(s) || s.paymentInProgress) ? AiraColors.goldSoft : _statusBg(s.status));
   /// Display status text.
   Color _displayStatusText(BookingSlot s) =>
-      _isMissed(s) ? AiraColors.errorText : (_hasPendingReschedule(s) ? const Color(0xFF8A6A1F) : _statusText(s.status));
+      _isMissed(s) ? AiraColors.errorText : ((_hasPendingReschedule(s) || s.paymentInProgress) ? const Color(0xFF8A6A1F) : _statusText(s.status));
 
   /// UI piece: slot tile.
   Widget _slotTile(BookingSlot s) {
@@ -382,7 +385,9 @@ class _BookingScreenState extends State<BookingScreen> {
   /// Returns true if completed.
   bool _isCompleted(BookingSlot s) => s.status == SlotStatus.completed;
   /// Missed bookings get their own tab (they no longer sit under Requests / Upcoming).
-  bool _isMissedTab(BookingSlot s) => _isMissed(s);
+  /// Also includes bookings the server already closed as "no_show": they never reached the
+  /// Requests / Upcoming / Completed tabs, so without this they were not listed anywhere.
+  bool _isMissedTab(BookingSlot s) => _isMissed(s) || s.status == SlotStatus.noShow;
 
   /// For tab.
   List<BookingSlot> _forTab(String tab) {
@@ -488,7 +493,7 @@ class _BookingScreenState extends State<BookingScreen> {
     final requests = widget.slots.where((s) => s.bookingId != null && _isRequest(s)).length;
     final upcoming = widget.slots.where((s) => s.bookingId != null && _isUpcoming(s)).length;
     final completed = widget.slots.where((s) => s.bookingId != null && _isCompleted(s)).length;
-    final missed = widget.slots.where((s) => s.bookingId != null && _isMissed(s)).length;
+    final missed = widget.slots.where((s) => s.bookingId != null && _isMissedTab(s)).length;
     final list = _forTab(_tab);
 
     return ListView(

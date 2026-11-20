@@ -19,11 +19,14 @@ import 'auth/registration_status_screen.dart';
 import 'help_center_screen.dart';
 import 'support_tickets_screen.dart';
 import 'calendar_screen.dart';
+import 'edit_travel_charges_screen.dart';
 import 'edit_working_hours_screen.dart';
 import 'public_profile_preview_screen.dart';
 import 'auth/forgot_password_screen.dart';
 import '../utils/share_profile.dart';
 import 'onboarding/artist_page_setup_screen.dart';
+import 'onboarding/registration_fee_screen.dart';
+import '../utils/accepting_bookings.dart';
 import 'my_clients_screen.dart';
 import 'reviews_ratings_screen.dart';
 import 'insights_screen.dart';
@@ -54,20 +57,18 @@ class SettingsScreen extends StatefulWidget {
 /// State of [SettingsScreen] — holds the screen data and logic.
 class _SettingsScreenState extends State<SettingsScreen> {
   bool? _accepting; // null until the profile is known
+  bool _feePending = false; // registration fee still to be paid → bookings stay switched off
 
   /// Turns new bookings on / off. Off = hidden from search and cannot be booked (existing bookings are unaffected).
   /// API: artistBusiness.setAcceptingBookings → PUT /artists/profile/accepting_bookings/
   Future<void> _toggleAccepting(bool v) async {
-    final before = _accepting ?? widget.profile?.isAcceptingBookings ?? true;
-    setState(() => _accepting = v);
-    try {
-      await ServiceLocator.artistBusiness.setAcceptingBookings(v);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _accepting = before);
-        AppFeedback.showError(context, e);
-      }
-    }
+    // Handles: admin lock, unpaid fee, waiting for approval and every server message (see accepting_bookings.dart).
+    final ok = await changeAcceptingBookings(context, v, lockedByAdmin: widget.profile?.acceptingLockedByAdmin ?? false);
+    if (!mounted || !ok) return;
+    setState(() {
+      _accepting = v;
+      if (v) _feePending = false;
+    });
   }
 
   ArtistExtraDetails _extra = const ArtistExtraDetails();
@@ -79,6 +80,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _load();
+    if (widget.profile?.registrationEligible == false) _feePending = true;
+    pendingRegistrationFee().then((f) {
+      if (mounted && f != null) setState(() => _feePending = true);
+    });
   }
 
   /// Loads this screen's data.
@@ -309,6 +314,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       } else if (row == 'Edit Working Hours') {
         // Navigates to EditWorkingHoursScreen (per-day timings, same as onboarding)
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EditWorkingHoursScreen()));
+      } else if (row == 'Travel Charges') {
+        // Navigates to EditTravelChargesScreen (see / change / remove the travel charge of each city)
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EditTravelChargesScreen()));
       } else if (row == 'Business') {
         // Navigates to BusinessDetailsScreen (Locations | Portfolio | KYC tabs)
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BusinessDetailsScreen(initialTab: 'setup')));
@@ -434,7 +442,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
 
     final live = profile?.approvalStatusId != null;
-    final accepting = _accepting ?? profile?.isAcceptingBookings ?? true;
+    final lockedByAdmin = profile?.acceptingLockedByAdmin ?? false;
 
     return SunndariBackground(
       child: ListView(
@@ -446,25 +454,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Center(child: SunndariLogo(width: 84)),
           ),
           const SunndariTabHeader(title: 'My Profile', subtitle: 'Your Brand. Your Business.'),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-            child: AiraCard(
-              padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
-              child: SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                activeColor: AiraColors.rose,
-                title: Text('Accepting New Bookings',
-                    style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                subtitle: Text(
-                  accepting
-                      ? 'Clients Can Find And Book You.'
-                      : 'Hidden From Search. Existing Bookings Are Not Affected.',
-                  style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft),
+          ValueListenableBuilder<bool?>(
+            valueListenable: acceptingBookingsNotifier,
+            builder: (context, shared, _) {
+              final accepting = shared ?? _accepting ?? profile?.isAcceptingBookings ?? false; // same value as Home
+              final feePending = _feePending && shared != true;
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                child: AiraCard(
+                  padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeColor: AiraColors.rose,
+                    title: Text('Accepting New Bookings',
+                        style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
+                    subtitle: Text(
+                      lockedByAdmin
+                          ? 'Switched Off By Sunndari Support. Contact Support To Turn Bookings Back On.'
+                          : feePending
+                          ? 'Pay The Registration Fee To Start Accepting Bookings.'
+                          : (accepting
+                          ? 'Clients Can Find And Book You.'
+                          : 'Hidden From Search. Existing Bookings Are Not Affected.'),
+                      style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft),
+                    ),
+                    value: accepting && !feePending && !lockedByAdmin,
+                    onChanged: _toggleAccepting,
+                  ),
                 ),
-                value: accepting,
-                onChanged: _toggleAccepting,
-              ),
-            ),
+              );
+            },
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
@@ -505,7 +524,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       Expanded(
                         child: GhostButton(
-                          label: 'View Public Profile',
+                          label: 'View Profile', // short enough to fit next to "Share Profile" (the long label was cut off)
                           icon: Icons.visibility_outlined,
                           small: true,
                           expand: true,
@@ -535,6 +554,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           group('My Business', const [
             (Icons.design_services_outlined, 'Edit & Add Service'),
             (Icons.access_time_rounded, 'Edit Working Hours'),
+            (Icons.directions_car_outlined, 'Travel Charges'),
             (Icons.storefront_outlined, 'Business'),
           ]),
           group('Grow', const [

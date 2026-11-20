@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../models/artist/artist_extras.dart';
 import '../../models/artist/artist_profile_update.dart';
@@ -38,7 +39,7 @@ import '../auth/login_screen.dart';
 import '../auth/logout_helper.dart';
 import '../auth/post_login_router.dart';
 import '../help_center_screen.dart';
-import 'artist_page_services_steps.dart' show kMakeupTypeCategory;
+import 'artist_page_services_steps.dart' show kMakeupTypeCategory, isAdditionalServiceSub;
 import 'onboarding_agreement_step.dart';
 import 'onboarding_widgets.dart' show aadhaarDigits;
 
@@ -121,7 +122,7 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
       final r = await ServiceLocator.coreService.getAllServiceSubCategories(limit: 100);
       // "Makeup Type" rows (HD / Airbrush …) are not services, so they are not specialities.
       final subs = r.data
-          .where((x) => x.isActive && (x.categoryName ?? '').trim().toLowerCase() != kMakeupTypeCategory.toLowerCase())
+          .where((x) => x.isActive && (x.categoryName ?? '').trim().toLowerCase() != kMakeupTypeCategory.toLowerCase() && !isAdditionalServiceSub(x))
           .toList();
       final names = <String>[];
       final byId = <int, String>{};
@@ -167,6 +168,11 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
   final _step3 = StepThreeKycData();
   final _step4 = StepFourPayoutAgreementData();
   final _picker = ImagePicker();
+  /// Signature of the ID documents already uploaded in this session (so going back and
+  /// pressing Save & Continue again does not upload the same photos a second time).
+  String? _uploadedDocSig;
+  /// Same idea for the PAN card (number + photo already uploaded in this session).
+  String? _uploadedPanSig;
   /// Work photos already saved on the server (so a returning artist is not forced to re-add them).
   int _uploadedWorkSamples = 0;
 
@@ -198,8 +204,8 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
         kind = name.contains('approv') || name.contains('verif')
             ? ApprovalStatusKind.approved
             : name.contains('reject')
-                ? ApprovalStatusKind.rejected
-                : ApprovalStatusKind.pending;
+            ? ApprovalStatusKind.rejected
+            : ApprovalStatusKind.pending;
       } else {
         kind = await resolveApprovalStatusKind(d.verificationStatusId);
         if (kind == ApprovalStatusKind.unknown) kind = ApprovalStatusKind.pending;
@@ -291,8 +297,14 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
       _dobCtrl.text = formatDob(extra.dob);
       _step1.sameAsFullName = draft['same'] == true;
 
+      // 'expKey' = the range as the server names it; 'exp' = index in the list used before "0-1 Years" existed.
+      final expKey = draft['expKey'];
       final exp = draft['exp'];
-      if (exp is int && exp >= 0 && exp < _experiences.length) _step2.experience = _experiences[exp];
+      if (expKey is String && experienceLabelFromRangeKey(expKey) != null) {
+        _step2.experience = experienceLabelFromRangeKey(expKey);
+      } else if (exp is int && exp >= 0 && exp < kLegacyExperienceRanges.length) {
+        _step2.experience = kLegacyExperienceRanges[exp];
+      }
       _step2.specialities.addAll(extra.specialities);
       try {
         // API call: artistService.getAllPortfolios → GET /artists/portfolio/get_all/
@@ -338,7 +350,7 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
     'displayName': _dispNameCtrl.text.trim(),
     'instagram': _instaCtrl.text.trim(),
     'same': _step1.sameAsFullName,
-    'exp': _step2.experience == null ? null : _experiences.indexOf(_step2.experience!),
+    'expKey': experienceRangeKeyFromLabel(_step2.experience),
     'idType': _step3.idType.name,
     'holder': _holderCtrl.text.trim(),
     'bankName': _bankCtrl.text.trim(),
@@ -437,6 +449,8 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
       case 3:
         final id = _validateIdNumber();
         if (id != null) return id;
+        final vanished = _vanishedDocs();
+        if (vanished != null) return vanished;
         if (_step3.idFront == null) return 'Please Upload The Front Side Of Your ${_step3.idType.label}.';
         if (widget.updateIdProof) return null; // only the ID proof is replaced
         if (!_panRe.hasMatch(_panNumCtrl.text.trim().toUpperCase())) return 'Please Enter A Valid PAN Number.';
@@ -493,7 +507,10 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
         // Say WHAT could not be saved, then WHY — so the artist knows what to fix.
         const what = {1: 'Could Not Save Your Details', 2: 'Could Not Save Your Professional Details',
           3: 'Could Not Upload Your Documents', 4: 'Could Not Save Your Payout Details'};
-        setState(() => _error = '${what[_step] ?? 'Could not continue'}. ${AppFeedback.friendlyMessage(e)}');
+        final why = e is FileSystemException || e.toString().contains('PathNotFound')
+            ? 'A Selected Photo Is No Longer Available. Please Select Your Document Photos Again.'
+            : AppFeedback.friendlyMessage(e);
+        setState(() => _error = '${what[_step] ?? 'Could not continue'}. $why');
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -536,7 +553,7 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
       displayName: display,
       dateOfBirth: _isoDate(_step1.dob!),
       instagramUrl: _instagramUrl(),
-      profileType: prev.profileType == null ? null : prev.profileType!.name,
+      profileTypes: prev.profileTypes.isEmpty ? null : prev.profileTypes.map((t) => t.name).toList(),
     ));
 
     final extra = prev.copyWith(
@@ -554,7 +571,11 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
   Future<void> _saveArtistry() async {
     final years = _experienceYears[_experiences.indexOf(_step2.experience!)];
     // API call: artistService.updateProfile → PUT /artists/profile/update/
-    await ServiceLocator.artistService.updateProfile(ArtistProfileUpdate(yearsExperience: years));
+    // (experience_range is what the server shows; years_experience is only kept for older app versions)
+    await ServiceLocator.artistService.updateProfile(ArtistProfileUpdate(
+      yearsExperience: years,
+      experienceRange: experienceRangeKeyFromLabel(_step2.experience),
+    ));
     await _uploadWorkSamples();
     // Specialities must be one of the artist's OFFERED services, which are added later in
     // "Build My Artist Page" — they are kept here and pushed to the server from there.
@@ -606,27 +627,55 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
 
   /// Saves documents.
   /// API: POST /artists/documents/create/ (multipart: document_type=id_proof, id_type, document_number, file, back_file)
+  /// API: POST /artists/documents/create/ (multipart: document_type=pan, document_number, file)
   Future<void> _saveDocuments() async {
     final idNumber = _step3.idType == GovIdType.aadhaar
         ? aadhaarDigits(_idNumCtrl.text)
         : _idNumCtrl.text.trim().toUpperCase().replaceAll(' ', '');
-    // The full ID number is never stored on the device (the server keeps it masked).
+    // The full ID / PAN number is never stored on the device (the server keeps it masked).
     await _saveDraft();
+
+    // ── ID proof ──
+    // Same ID, number and photos as the last successful upload → nothing new to send.
+    final sig = '${_apiIdType}|$idNumber|${_step3.idFront?.path}|${_step3.idBack?.path}';
+    if (_uploadedDocSig != sig) {
+      try {
+        // API call: artistBusiness.createDocument → POST /artists/documents/create/
+        // (a new ID proof replaces the previous one and goes back to `pending`)
+        await ServiceLocator.artistBusiness.createDocument(
+          documentType: 'id_proof',
+          idType: _apiIdType,
+          documentNumber: idNumber,
+          file: _step3.idFront!,
+          backFile: _step3.idBack,
+        );
+        _uploadedDocSig = sig;
+      } catch (e) {
+        if (!kAllowOfflineOnboarding) rethrow;
+        debugPrint('KYC submit failed, kept on device: $e');
+      }
+    }
+
+    // ── PAN card ── (not shown when only the ID proof is being replaced)
+    if (widget.updateIdProof) return;
+    final panImage = _step3.panImage;
+    if (panImage == null) return;
+    final panNumber = _panNumCtrl.text.trim().toUpperCase();
+    final panSig = '$panNumber|${panImage.path}';
+    if (_uploadedPanSig == panSig) return;
     try {
       // API call: artistBusiness.createDocument → POST /artists/documents/create/
-      // (a new ID proof replaces the previous one and goes back to `pending`)
+      // document_type=pan, document_number=ABCDE1234F, file=<PAN photo> (multipart)
       await ServiceLocator.artistBusiness.createDocument(
-        documentType: 'id_proof',
-        idType: _apiIdType,
-        documentNumber: idNumber,
-        file: _step3.idFront!,
-        backFile: _step3.idBack,
+        documentType: 'pan',
+        documentNumber: panNumber,
+        file: panImage,
       );
+      _uploadedPanSig = panSig;
     } catch (e) {
       if (!kAllowOfflineOnboarding) rethrow;
-      debugPrint('KYC submit failed, kept on device: $e');
+      debugPrint('PAN submit failed, kept on device: $e');
     }
-    // NOTE: the API has no PAN field — the PAN stays in the on-device draft only.
   }
 
   /// Saves payout.
@@ -963,41 +1012,41 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
             ),
           )
         else
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: _specialities.map((item) {
-            final on = _step2.specialities.contains(item);
-            return InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: () => setState(() => on ? _step2.specialities.remove(item) : _step2.specialities.add(item)),
-              child: Container(
-                width: tileW,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                decoration: BoxDecoration(
-                  color: AiraColors.pinkFill,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: on ? AiraColors.roseDeep : AiraColors.pinkBorder, width: on ? 1.5 : 1.1),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: _specialities.map((item) {
+              final on = _step2.specialities.contains(item);
+              return InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => setState(() => on ? _step2.specialities.remove(item) : _step2.specialities.add(item)),
+                child: Container(
+                  width: tileW,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AiraColors.pinkFill,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: on ? AiraColors.roseDeep : AiraColors.pinkBorder, width: on ? 1.5 : 1.1),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(on ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+                          size: 19, color: on ? AiraColors.roseDeep : AiraColors.charcoalSoft),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(item, style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w600))),
+                    ],
+                  ),
                 ),
-                child: Row(
-                  children: [
-                    Icon(on ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
-                        size: 19, color: on ? AiraColors.roseDeep : AiraColors.charcoalSoft),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(item, style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w600))),
-                  ],
-                ),
-              ),
-            );
-          }).toList(),
-        ),
+              );
+            }).toList(),
+          ),
         const SizedBox(height: 16),
         _heading('Your Work, In Pictures', sub: 'Upload 1 To 5 Photos Of Makeup You’ve Done (At Least 1 Is Required).'),
         InkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () async {
             try {
-              final picked = await _picker.pickMultiImage(imageQuality: 85);
+              final picked = await _picker.pickMultiImage(); // originals — the server shrinks them
               if (picked.isEmpty) return;
               final room = 5 - _step2.workPhotos.length;
               if (picked.length > room && mounted) {
@@ -1082,10 +1131,41 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
         if (mounted) AppFeedback.showWarning(context, 'This Photo Is Too Large (Over 8 MB). Please Choose A Smaller One.');
         return;
       }
-      if (mounted) setState(() => set(x));
+      // The picker's own copy lives in the cache folder, which Android can clean at any time
+      // (e.g. while the artist reads the agreement). Keep a copy in app storage instead.
+      final kept = await _keepPickedFile(x);
+      if (mounted) setState(() => set(kept));
     } catch (e) {
       if (mounted) AppFeedback.showError(context, e);
     }
+  }
+
+  /// Copies a picked photo from the (temporary) cache into the app's own documents folder.
+  /// Falls back to the original file if the copy cannot be made.
+  Future<XFile> _keepPickedFile(XFile x) async {
+    try {
+      final base = await getApplicationDocumentsDirectory();
+      final dir = Directory('${base.path}${Platform.pathSeparator}kyc_photos');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final dot = x.name.lastIndexOf('.');
+      final ext = dot == -1 ? '.jpg' : x.name.substring(dot);
+      final dest = '${dir.path}${Platform.pathSeparator}doc_${DateTime.now().microsecondsSinceEpoch}$ext';
+      await File(x.path).copy(dest);
+      return XFile(dest, name: x.name);
+    } catch (_) {
+      return x;
+    }
+  }
+
+  /// If a selected photo no longer exists on the phone, un-select it and say which one to re-pick.
+  String? _vanishedDocs() {
+    bool gone(XFile? f) => f != null && !File(f.path).existsSync();
+    final lost = <String>[];
+    if (gone(_step3.idFront)) { _step3.idFront = null; lost.add('Front Side'); }
+    if (gone(_step3.idBack)) { _step3.idBack = null; lost.add('Back Side'); }
+    if (gone(_step3.panImage)) { _step3.panImage = null; lost.add('PAN Card'); }
+    if (lost.isEmpty) return null;
+    return 'Your ${lost.join(' And ')} Photo Is No Longer Available On The Phone. Please Select It Again.';
   }
 
   /// Id hint.
@@ -1169,21 +1249,21 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> with Widget
           ],
         ),
         if (!widget.updateIdProof) ...[
-        const SizedBox(height: 20),
-        _heading('PAN Number'),
-        Divider(thickness: 1,),
-        SunndariField(
-          label: 'Enter Your PAN Number',
-          controller: _panNumCtrl,
-          hint: 'Enter PAN Number',
-          capitalization: TextCapitalization.characters,
-          helper: '10 Characters, e.g. ABCDE1234F',
-          formatters: const [_DocNumberFormatter(maxChars: 10)],
-        ),
-        const SizedBox(height: 6),
-        _heading('PAN Card Document'),
-        _uploadBox('Upload PAN Card', 'Choose A Photo Or File', _step3.panImage, () => _pickDoc((x) => _step3.panImage = x),
-            full: true),
+          const SizedBox(height: 20),
+          _heading('PAN Number'),
+          Divider(thickness: 1,),
+          SunndariField(
+            label: 'Enter Your PAN Number',
+            controller: _panNumCtrl,
+            hint: 'Enter PAN Number',
+            capitalization: TextCapitalization.characters,
+            helper: '10 Characters, e.g. ABCDE1234F',
+            formatters: const [_DocNumberFormatter(maxChars: 10)],
+          ),
+          const SizedBox(height: 6),
+          _heading('PAN Card Document'),
+          _uploadBox('Upload PAN Card', 'Choose A Photo Or File', _step3.panImage, () => _pickDoc((x) => _step3.panImage = x),
+              full: true),
         ],
         const SizedBox(height: 6),
         Text('Make Sure The Text And Photo Are Easy To Read.',

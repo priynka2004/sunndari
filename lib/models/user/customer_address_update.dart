@@ -9,6 +9,9 @@ class CustomerAddressUpdate {
   final String? city;
   final String? pinCode;
   final bool? isDefault;
+  /// Exact Google Maps location (sent only when the address was chosen on the map).
+  final double? latitude;
+  final double? longitude;
 
   CustomerAddressUpdate({
     required this.addressId,
@@ -17,6 +20,8 @@ class CustomerAddressUpdate {
     this.city,
     this.pinCode,
     this.isDefault,
+    this.latitude,
+    this.longitude,
   });
 
   /// Converts this object to JSON for the API.
@@ -27,5 +32,6 @@ class CustomerAddressUpdate {
     if (city != null) 'city': city,
     if (pinCode != null) 'pin_code': pinCode,
     if (isDefault != null) 'is_default': isDefault,
+    if (latitude != null && longitude != null) ...{'latitude': latitude, 'longitude': longitude},
   };
 }

@@ -213,6 +213,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   IconData _iconFor(AppNotification n) {
     final t = n.type.toLowerCase();
     if (n.isAddServicePrompt) return Icons.auto_awesome_outlined; // "New service: …" announcement
+    if (t == 'payout_account_changed') return Icons.account_balance_outlined; // payout security notice
     if (t.contains('chat')) return Icons.chat_bubble_outline_rounded;
     if (t.contains('otp')) return Icons.pin_outlined;
     if (t.contains('reschedule')) return Icons.event_repeat_outlined;
@@ -284,65 +285,65 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 child: _loading
                     ? const Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: AiraColors.rose))
                     : (_error != null && all.isEmpty)
-                        ? AiraErrorState(message: _error!, onRetry: _load)
-                        : items.isEmpty
-                            ? Center(
-                                child: Text("You're All Caught Up ✨",
-                                    style: AiraText.sans(fontSize: 13.5, color: AiraColors.charcoalSoft)),
-                              )
-                            : RefreshIndicator(
-                                onRefresh: _load,
-                                color: AiraColors.rose,
-                                child: ListView.separated(
-                                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                                  itemCount: items.length,
-                                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                                  itemBuilder: (context, i) {
-                                    final n = items[i];
-                                    return AiraCard(
-                                      padding: const EdgeInsets.all(14),
-                                      borderColor: n.isRead ? AiraColors.hair : AiraColors.pinkBorder,
-                                      onTap: () => _openDetail(n),
-                                      child: Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          SunndariIconBubble(icon: _iconFor(n), size: 44),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(n.title,
-                                                    style: AiraText.sans(
-                                                        fontSize: 14,
-                                                        fontWeight: n.isRead ? FontWeight.w600 : FontWeight.w800,
-                                                        color: AiraColors.roseDeep)),
-                                                const SizedBox(height: 3),
-                                                Text(n.message,
-                                                    maxLines: 2,
-                                                    overflow: TextOverflow.ellipsis,
-                                                    style: AiraText.sans(
-                                                        fontSize: 12.5, color: AiraColors.charcoalSoft, height: 1.35)),
-                                                const SizedBox(height: 6),
-                                                Text(_timeAgo(n.createdAt),
-                                                    style: AiraText.sans(fontSize: 11, color: AiraColors.charcoalSoft)),
-                                              ],
-                                            ),
-                                          ),
-                                          if (!n.isRead)
-                                            Container(
-                                              width: 9,
-                                              height: 9,
-                                              margin: const EdgeInsets.only(top: 4, left: 8),
-                                              decoration: const BoxDecoration(
-                                                  shape: BoxShape.circle, color: AiraColors.rose),
-                                            ),
-                                        ],
-                                      ),
-                                    );
-                                  },
-                                ),
+                    ? AiraErrorState(message: _error!, onRetry: _load)
+                    : items.isEmpty
+                    ? Center(
+                  child: Text("You're All Caught Up ✨",
+                      style: AiraText.sans(fontSize: 13.5, color: AiraColors.charcoalSoft)),
+                )
+                    : RefreshIndicator(
+                  onRefresh: _load,
+                  color: AiraColors.rose,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                    itemCount: items.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, i) {
+                      final n = items[i];
+                      return AiraCard(
+                        padding: const EdgeInsets.all(14),
+                        borderColor: n.isRead ? AiraColors.hair : AiraColors.pinkBorder,
+                        onTap: () => _openDetail(n),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SunndariIconBubble(icon: _iconFor(n), size: 44),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(n.title,
+                                      style: AiraText.sans(
+                                          fontSize: 14,
+                                          fontWeight: n.isRead ? FontWeight.w600 : FontWeight.w800,
+                                          color: AiraColors.roseDeep)),
+                                  const SizedBox(height: 3),
+                                  Text(n.message,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: AiraText.sans(
+                                          fontSize: 12.5, color: AiraColors.charcoalSoft, height: 1.35)),
+                                  const SizedBox(height: 6),
+                                  Text(_timeAgo(n.createdAt),
+                                      style: AiraText.sans(fontSize: 11, color: AiraColors.charcoalSoft)),
+                                ],
                               ),
+                            ),
+                            if (!n.isRead)
+                              Container(
+                                width: 9,
+                                height: 9,
+                                margin: const EdgeInsets.only(top: 4, left: 8),
+                                decoration: const BoxDecoration(
+                                    shape: BoxShape.circle, color: AiraColors.rose),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ),
             ],
           ),

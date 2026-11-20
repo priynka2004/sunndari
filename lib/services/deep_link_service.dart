@@ -52,9 +52,11 @@ class DeepLinkService {
 
   /// Builds the https link that is shared (WhatsApp, Telegram, SMS, Instagram, anywhere).
   /// Example: https://priynka2004.github.io/sunndari/?slug=priya-sheoran-e4c2de
-  static String profileShareUrl(String slug) {
+  /// [artistId] is added too, so the CUSTOMER app can open the profile straight away.
+  static String profileShareUrl(String slug, {int? artistId}) {
     final base = kProfileOpenPageUrl.endsWith('/') ? kProfileOpenPageUrl : '$kProfileOpenPageUrl/';
-    return '$base?slug=${Uri.encodeQueryComponent(slug)}';
+    final id = (artistId != null && artistId > 0) ? '&id=$artistId' : '';
+    return '$base?slug=${Uri.encodeQueryComponent(slug)}$id';
   }
 
   /// The logged-in artist's public slug.
@@ -79,8 +81,12 @@ class DeepLinkService {
 
   /// Ready-to-share link for the logged-in artist (null if the slug could not be loaded).
   static Future<String?> myProfileShareUrl() async {
+    int? artistId;
+    try {
+      artistId = (await ServiceLocator.artistService.getProfile()).artistId;
+    } catch (_) {}
     final slug = await mySlug();
-    return slug == null ? null : profileShareUrl(slug);
+    return slug == null ? null : profileShareUrl(slug, artistId: artistId);
   }
 
   /// Call once in main() before runApp.

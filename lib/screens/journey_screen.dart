@@ -1,19 +1,27 @@
 // FILE: screens/journey_screen.dart
-// SCREEN: Journey — booking lifecycle: On My Way -> Arrival OTP -> Start PIN -> In progress -> Completion PIN. Shares live location.
+// SCREEN: Journey — Start PIN -> In progress -> Completion PIN. Shares live location.
+// Home Visit: On My Way + Arrived are marked automatically (no screens for them), straight to the Start PIN.
+// In-Salon bookings have no On My Way / Arrived: Start Service -> Start PIN -> In progress -> photo -> Completion PIN.
 //
 // APIs used:
 //   GET /users/address/get/
 //   PUT /artists/bookings/on_my_way/
 //   PUT /artists/bookings/arrived/
+//   PUT /artists/bookings/start_pin/request/      (In-Salon)
 //   PUT /artists/bookings/start_pin/verify/
+//   PUT /artists/bookings/completion_proof/upload/ (camera photo of the finished service)
+//   PUT /artists/bookings/completion_pin/request/
 //   PUT /artists/bookings/completion_pin/verify/
 
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 import '../theme/tokens.dart';
 import '../widgets/common.dart';
+import '../widgets/completion_proof_image.dart';
+import '../widgets/advance_payment_widgets.dart';
 import '../models/models.dart';
 import '../models/booking/booking.dart';
 import '../models/booking/booking_journey.dart';
@@ -66,7 +74,14 @@ class _JourneyScreenState extends State<JourneyScreen> {
   geocoder.LatLng? _customerLatLng;
   int? _geocodedForAddressId;
 
+  // Home Visit: the "On My Way" and "I Have Arrived" screens are not shown any more. When the artist opens the
+  // journey, the app marks On My Way + Arrived in the background (same two backend calls as before) and
+  // goes straight to the screen where the customer's start code is entered.
+  bool _advancing = false;
+  bool _advanceFailed = false;
+
   bool _completionRequested = false; // artist already tapped "Complete Service"
+  bool _startRequested = false; // In-Salon: artist already tapped "Start Service" (the customer has the start code)
 
   /// The artist already reviewed the customer for this booking — the
   /// "Review Customer" button must not be offered again.
@@ -82,8 +97,18 @@ class _JourneyScreenState extends State<JourneyScreen> {
   JourneyStage get _stage {
     final b = _booking;
     if (b == null) return JourneyStage.upcoming;
-    return JourneyStage.fromBooking(b, BookingStats.mapStatus(b.statusId, widget.statuses, cancelledBy: b.cancelledBy));
+    return JourneyStage.fromBooking(
+      b,
+      BookingStats.mapStatus(b.statusId, widget.statuses, cancelledBy: b.cancelledBy),
+      startPinRequested: _startRequested,
+    );
   }
+
+  /// True for an In-Salon booking: no On My Way / Arrived, the artist starts the service with a PIN.
+  bool get _isInSalon => _booking?.isInSalon ?? false;
+
+  /// The finished-service photo is on the server.
+  bool get _hasCompletionPhoto => _booking?.completionProof != null;
 
   /// Stage credential key.
   String? get _stageCredentialKey => switch (_stage) {
@@ -132,20 +157,74 @@ class _JourneyScreenState extends State<JourneyScreen> {
   /// After booking changed.
   void _afterBookingChanged() {
     _refreshCompletionRequested();
+    _refreshStartRequested();
     _refreshCustomerReviewed();
-    if (_stage == JourneyStage.onTheWay || _stage == JourneyStage.arrived) {
+    // An In-Salon booking has no travel: no live location is shared and there is no customer address to show.
+    if (!_isInSalon && (_stage == JourneyStage.onTheWay || _stage == JourneyStage.arrived)) {
       _startLocationSharing();
       _loadCustomerLocation();
     } else {
       _stopLocationSharing();
     }
     _checkLockout();
+    _autoAdvanceToStartCode();
+  }
+
+  /// Home Visit only: skips the "On My Way" and "I Have Arrived" screens.
+  /// upcoming  -> PUT /artists/bookings/on_my_way/ -> PUT /artists/bookings/arrived/
+  /// onTheWay  -> PUT /artists/bookings/arrived/
+  /// The backend still gets both steps in the right order (it needs them to create the customer's start
+  /// code); the artist just does not have to tap them. Only runs inside the allowed window (2 hours before
+  /// the appointment) and only once — a failure stops here and shows a retry button instead of looping.
+  Future<void> _autoAdvanceToStartCode() async {
+    if (_isInSalon || _booking == null || _advancing || _advanceFailed) return;
+    final stage = _stage;
+    if (stage != JourneyStage.upcoming && stage != JourneyStage.onTheWay) return;
+    if (stage == JourneyStage.upcoming && !widget.slot.isWithinUpcomingWindow) return;
+    setState(() => _advancing = true);
+    try {
+      if (stage == JourneyStage.upcoming) {
+        final b = await ServiceLocator.bookingJourneyService.markOnMyWay(_bookingId);
+        if (!mounted) return;
+        setState(() => _booking = b);
+      }
+      final arrived = await ServiceLocator.bookingJourneyService.markArrived(_bookingId);
+      if (!mounted) return;
+      setState(() {
+        _booking = arrived;
+        _advancing = false;
+      });
+      widget.onRefresh?.call();
+      _afterBookingChanged(); // now `arrived`: location sharing + code entry
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _advancing = false;
+        _advanceFailed = true; // set BEFORE handling the error so a reload cannot start this again
+      });
+      await _handleJourneyError(e);
+    }
+  }
+
+  /// Retry button after a failed [_autoAdvanceToStartCode].
+  void _retryAdvance() {
+    setState(() => _advanceFailed = false);
+    _autoAdvanceToStartCode();
   }
 
   /// Checks whether the completion code was already requested (artist tapped "Complete Service").
   Future<void> _refreshCompletionRequested() async {
     final requested = await ServiceLocator.bookingJourneyService.isCompletionRequested(_bookingId);
     if (mounted && requested != _completionRequested) setState(() => _completionRequested = requested);
+  }
+
+  /// Checks whether the Start Service code was already requested (In-Salon: artist tapped "Start Service").
+  Future<void> _refreshStartRequested() async {
+    final requested = await ServiceLocator.bookingJourneyService.isStartRequested(_bookingId);
+    if (mounted && requested != _startRequested) {
+      setState(() => _startRequested = requested);
+      _checkLockout();
+    }
   }
 
   /// Checks whether this booking's customer review was already given.
@@ -173,6 +252,28 @@ class _JourneyScreenState extends State<JourneyScreen> {
   /// Tapping again re-sends the notification (same PIN), at most once a minute.
   /// API: bookingJourneyService.requestCompletionPin → PUT /artists/bookings/completion_pin/request/
   Future<void> _submitRequestCompletion() async {
+    // Advance (20%) booking: ask "Did you receive ₹… ?" (Yes / No) before the photo and the code.
+    final summary = _booking?.paymentSummary;
+    if (summary != null && summary.needsAnswer) {
+      final received = await askBalanceReceived(context, summary);
+      if (received == null || !mounted) return;
+      setState(() => _busy = true);
+      try {
+        final updated = await ServiceLocator.bookingJourneyService.confirmBalance(_bookingId, received: received);
+        if (!mounted) return;
+        setState(() => _booking = updated);
+      } catch (e) {
+        await _handleJourneyError(e);
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
+      if (mounted) setState(() => _busy = false);
+    }
+    // The photo of the finished service comes first: without it the server refuses the completion code.
+    if (!_hasCompletionPhoto) {
+      final uploaded = await _takeCompletionPhoto();
+      if (!uploaded) return;
+    }
     setState(() => _busy = true);
     try {
       await ServiceLocator.bookingJourneyService.requestCompletionPin(_bookingId);
@@ -186,16 +287,42 @@ class _JourneyScreenState extends State<JourneyScreen> {
     }
   }
 
+  /// Opens the CAMERA (never the gallery), then uploads the photo of the finished service.
+  /// The original photo is sent as it is — the server shrinks it. Returns true when a photo is on the server.
+  /// API: bookingJourneyService.uploadCompletionProof → PUT /artists/bookings/completion_proof/upload/
+  Future<bool> _takeCompletionPhoto() async {
+    final XFile? shot;
+    try {
+      shot = await ImagePicker().pickImage(source: ImageSource.camera);
+    } catch (e) {
+      if (mounted) AppFeedback.showError(context, e);
+      return false;
+    }
+    if (shot == null || !mounted) return false;
+    setState(() => _busy = true);
+    try {
+      final booking = await ServiceLocator.bookingJourneyService.uploadCompletionProof(_bookingId, shot);
+      if (!mounted) return false;
+      setState(() => _booking = booking);
+      AppFeedback.showSuccess(context, 'Photo Saved');
+      return booking.completionProof != null;
+    } catch (e) {
+      await _handleJourneyError(e);
+      return false;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// Loads customer location.
-  /// API: userService.getAddress → GET /users/address/get/
+  /// Address comes inside the booking (GET /artists/bookings/get/) — artists cannot call /users/address/get/.
   Future<void> _loadCustomerLocation() async {
     final booking = _booking;
-    final addressId = booking?.addressId;
-    if (booking == null || addressId == null) return;
+    final address = booking?.address;
+    final addressId = booking?.addressId ?? address?.addressId;
+    if (booking == null || address == null || addressId == null) return;
     if (_geocodedForAddressId == addressId && _customerLatLng != null) return;
     try {
-      // API call: userService.getAddress → GET /users/address/get/
-      final address = await ServiceLocator.userService.getAddress(addressId);
       final latLng = await geocoder.AddressGeocoder.forAddress(address);
       if (!mounted) return;
       setState(() {
@@ -359,6 +486,25 @@ class _JourneyScreenState extends State<JourneyScreen> {
     }
   }
 
+  /// In-Salon: the artist taps "Start Service" once the customer is there → the customer gets the 4-digit start code.
+  /// Tapping again re-sends the notification (same PIN), at most once a minute.
+  /// API: bookingJourneyService.requestStartPin → PUT /artists/bookings/start_pin/request/
+  Future<void> _submitStartRequest() async {
+    setState(() => _busy = true);
+    try {
+      await ServiceLocator.bookingJourneyService.requestStartPin(_bookingId);
+      if (!mounted) return;
+      setState(() => _startRequested = true);
+      _afterBookingChanged();
+      widget.onRefresh?.call();
+      AppFeedback.showSuccess(context, 'Code Sent To The Customer — Ask Them To Read It Out');
+    } catch (e) {
+      await _handleJourneyError(e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// Submits start PIN.
   /// API: bookingJourneyService.verifyStartPin → PUT /artists/bookings/start_pin/verify/
   Future<void> _submitStartPin() async {
@@ -373,11 +519,21 @@ class _JourneyScreenState extends State<JourneyScreen> {
       final booking = await ServiceLocator.bookingJourneyService.verifyStartPin(_bookingId, pin);
       if (!mounted) return;
       _pinController.clear();
-      setState(() => _booking = booking);
+      setState(() {
+        _booking = booking;
+        _startRequested = false;
+      });
       _afterBookingChanged();
       widget.onRefresh?.call();
       AppFeedback.showSuccess(context, 'Service Started!');
     } catch (e) {
+      if (e is JourneyReasonError && e.reason.toLowerCase().contains('request the start service pin')) {
+        // The server says the code was never requested → show the "Start Service" button again.
+        await ServiceLocator.bookingJourneyService.clearStartRequested(_bookingId);
+        if (mounted) setState(() => _startRequested = false);
+        if (mounted) AppFeedback.showWarning(context, 'Tap "Start Service" First — The Customer Needs The Code.');
+        return;
+      }
       await _handleJourneyError(e);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -481,14 +637,13 @@ class _JourneyScreenState extends State<JourneyScreen> {
 
   /// UI piece: stepper.
   Widget _stepper(JourneyStage stage) {
-    const labels = ['On The Way', 'Arrived', 'Service Started', 'Complete'];
+    // The travel steps (On The Way / Arrived) are not shown: Start Code → Service Started → Complete.
+    const labels = ['Start Code', 'Service Started', 'Complete'];
     final activeIndex = switch (stage) {
-      JourneyStage.upcoming => -1,
-      JourneyStage.missed => -1,
-      JourneyStage.onTheWay => 0,
-      JourneyStage.arrived => 1,
-      JourneyStage.inProgress => 2,
-      JourneyStage.completed => 3,
+      JourneyStage.arrived => 0,
+      JourneyStage.inProgress => 1,
+      JourneyStage.completed => 2,
+      _ => -1,
     };
     return Row(
       children: List.generate(labels.length, (i) {
@@ -532,28 +687,35 @@ class _JourneyScreenState extends State<JourneyScreen> {
     switch (stage) {
       case JourneyStage.upcoming:
         final within = widget.slot.isWithinUpcomingWindow;
-        return [
-          _infoCard(
-            icon: Icons.directions_walk,
-            title: 'Ready When You Are',
-            body: within
-                ? 'Once You\'re About To Head Out, Tap Below To Start Sharing Your Live Location With The Customer.'
-                : 'You Can Mark Yourself On The Way Starting 2 Hours Before The Appointment.',
-          ),
-          const SizedBox(height: 16),
-          PrimaryButton(
-            label: 'On My Way',
-            expand: true,
-            onTap: _busy ? null : _submitOnMyWay,
-          ),
-        ];
+        if (_isInSalon) {
+          return [
+            _infoCard(
+              icon: Icons.storefront_outlined,
+              title: 'Ready When The Customer Arrives',
+              body: within
+                  ? 'Once The Customer Is At Your Studio, Tap \"Start Service\". '
+                  'They Then Get A 4-digit Start Code To Read Out To You.'
+                  : 'You Can Start The Service From 2 Hours Before The Appointment.',
+            ),
+            const SizedBox(height: 16),
+            PrimaryButton(
+              label: 'Start Service',
+              expand: true,
+              onTap: _busy ? null : _submitStartRequest,
+            ),
+          ];
+        }
+        return _startingContent(within);
 
       case JourneyStage.missed:
         return [
           _infoCard(
             icon: Icons.event_busy_outlined,
             title: 'Booking Missed',
-            body: 'The Scheduled Time Has Passed And This Was Never Marked "On My Way". '
+            body: _isInSalon
+                ? 'The Scheduled Time Has Passed And This Service Was Never Started. '
+                'It Can No Longer Be Started — Cancel It To Close It Out.'
+                : 'The Scheduled Time Has Passed And This Service Was Never Started. '
                 'It Can No Longer Be Started — Cancel It To Close It Out.',
           ),
           const SizedBox(height: 16),
@@ -566,30 +728,35 @@ class _JourneyScreenState extends State<JourneyScreen> {
         ];
 
       case JourneyStage.onTheWay:
-        return [
-          _infoCard(
-            icon: Icons.navigation_outlined,
-            title: 'On The Way',
-            body: _liveDistanceKm != null
-                ? 'Your Live Location Is Being Shared With The Customer — ${formatDistanceKm(_liveDistanceKm!)} To Their Address.'
-                : 'Your Live Location Is Being Shared With The Customer.',
-          ),
-          const SizedBox(height: 16),
-          _infoCard(
-            icon: Icons.info_outline,
-            title: 'When You Reach',
-            body: 'Tap "I Have Arrived" Once You Are At The Venue. '
-                'The Customer Then Gets A 4-digit Start Code — Ask Them To Read It Out To You.',
-          ),
-          const SizedBox(height: 16),
-          PrimaryButton(
-            label: 'I Have Arrived',
-            expand: true,
-            onTap: _busy ? null : _submitArrival,
-          ),
-        ];
+      // Not shown any more: the app marks Arrived by itself, then this becomes the code-entry screen.
+        return _startingContent(true);
 
       case JourneyStage.arrived:
+        if (_isInSalon) {
+          return [
+            _infoCard(
+              icon: Icons.mark_email_read_outlined,
+              title: 'Code Sent To Customer',
+              body: 'The Customer Now Has A 4-digit Start Code In Their App — Ask Them To Read It Out To Start The Service.',
+            ),
+            const SizedBox(height: 20),
+            _codeEntryCard(
+              title: 'Enter The Customer\'s Code',
+              subtitle: 'They\'ll Read This Out Loud From Their App.',
+              controller: _pinController,
+              length: 4,
+              buttonLabel: 'Start Service',
+              onSubmit: _submitStartPin,
+            ),
+            Center(
+              child: TextButton(
+                onPressed: _busy ? null : _submitStartRequest,
+                child: Text('Customer Didn\'t Get It? Resend Code',
+                    style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w600, color: AiraColors.roseDeep)),
+              ),
+            ),
+          ];
+        }
         return [
           _infoCard(
             icon: Icons.hourglass_bottom,
@@ -610,12 +777,20 @@ class _JourneyScreenState extends State<JourneyScreen> {
       case JourneyStage.inProgress:
         if (!_completionRequested) {
           return [
+            if (_booking?.paymentSummary?.isAdvance == true) ...[
+              PaymentSummaryCard(summary: _booking!.paymentSummary!),
+              const SizedBox(height: 16),
+            ],
             _infoCard(
               icon: Icons.content_cut,
               title: 'Service In Progress',
-              body: 'When You Have Finished, Tap "Complete Service". '
+              body: 'When You Have Finished, Take A Photo Of The Finished Service With Your Camera, Then Tap "Complete Service". '
                   'The Customer Then Gets A 4-digit Completion Code To Read Out To You.',
             ),
+            if (_hasCompletionPhoto) ...[
+              const SizedBox(height: 16),
+              _completionPhotoCard(canRetake: true),
+            ],
             const SizedBox(height: 16),
             PrimaryButton(
               label: 'Complete Service',
@@ -658,6 +833,10 @@ class _JourneyScreenState extends State<JourneyScreen> {
               title: 'Booking Completed',
               body: 'Nicely Done. Your Review For The Customer Is Saved.',
             ),
+            if (_hasCompletionPhoto) ...[
+              const SizedBox(height: 16),
+              _completionPhotoCard(canRetake: false),
+            ],
             const SizedBox(height: 16),
             PrimaryButton(
               label: 'Back To Bookings',
@@ -672,6 +851,10 @@ class _JourneyScreenState extends State<JourneyScreen> {
             title: 'Booking Completed',
             body: 'Nicely Done. Leave A Quick Review For The Customer While It\'s Fresh.',
           ),
+          if (_hasCompletionPhoto) ...[
+            const SizedBox(height: 16),
+            _completionPhotoCard(canRetake: false),
+          ],
           const SizedBox(height: 16),
           PrimaryButton(
             label: 'Review Customer',
@@ -681,6 +864,69 @@ class _JourneyScreenState extends State<JourneyScreen> {
           ),
         ];
     }
+  }
+
+  /// Home Visit, before the start code exists: no On My Way / Arrived screens, just a short
+  /// "getting ready" state (or the reason it cannot start yet, with a retry button).
+  List<Widget> _startingContent(bool within) {
+    if (_advanceFailed) {
+      return [
+        _infoCard(
+          icon: Icons.error_outline,
+          title: 'Could Not Get The Start Code',
+          body: 'Please Check Your Internet And Try Again. If It Keeps Failing, Pull Down To Refresh.',
+        ),
+        const SizedBox(height: 16),
+        PrimaryButton(label: 'Try Again', expand: true, onTap: _busy ? null : _retryAdvance),
+      ];
+    }
+    if (!within) {
+      return [
+        _infoCard(
+          icon: Icons.schedule,
+          title: 'Not Time Yet',
+          body: 'You Can Start The Service From 2 Hours Before The Appointment.',
+        ),
+      ];
+    }
+    return [
+      _infoCard(
+        icon: Icons.mark_email_read_outlined,
+        title: 'Getting The Start Code Ready',
+        body: 'The Customer Is Being Sent A 4-digit Start Code — Ask Them To Read It Out To You.',
+      ),
+      const SizedBox(height: 20),
+      const Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: AiraColors.rose)),
+    ];
+  }
+
+  /// UI piece: the photo of the finished service (private — shown with the Bearer header).
+  /// While the service is in progress the artist can take it again; the new photo replaces the old one.
+  Widget _completionPhotoCard({required bool canRetake}) {
+    final proof = _booking?.completionProof;
+    if (proof == null) return const SizedBox.shrink();
+    return AiraCard(
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: CompletionProofImage(proof: proof, width: 64, height: 64),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('Photo Of The Finished Service',
+                style: AiraText.sans(fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+          if (canRetake)
+            TextButton(
+              onPressed: _busy ? null : _takeCompletionPhoto,
+              child: Text('Retake',
+                  style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w600, color: AiraColors.roseDeep)),
+            ),
+        ],
+      ),
+    );
   }
 
   /// UI piece: code entry card.

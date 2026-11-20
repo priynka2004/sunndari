@@ -35,17 +35,18 @@ class CustomerAddress {
       return double.tryParse(v.toString());
     }
 
+    int i(dynamic v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}') ?? 0;
     final lat = d(json['latitude'] ?? json['lat']);
     final lng = d(json['longitude'] ?? json['lng'] ?? json['lon']);
     return CustomerAddress(
-      addressId: json['addressId'],
-      userId: json['userId'],
-      addressLine1: (json['addressLine1'] ?? '').toString(),
-      addressLine2: json['addressLine2']?.toString(),
+      addressId: i(json['addressId'] ?? json['address_id']),
+      userId: i(json['userId'] ?? json['user_id']),
+      addressLine1: (json['addressLine1'] ?? json['address_line1'] ?? json['address_line_1'] ?? '').toString(),
+      addressLine2: (json['addressLine2'] ?? json['address_line2'] ?? json['address_line_2'])?.toString(),
       city: (json['city'] ?? '').toString(),
-      pinCode: (json['pinCode'] ?? '').toString(),
-      isDefault: json['isDefault'] == true,
-      createdAt: DateTime.tryParse('${json['createdAt']}') ?? DateTime.now(),
+      pinCode: (json['pinCode'] ?? json['pin_code'] ?? '').toString(),
+      isDefault: (json['isDefault'] ?? json['is_default']) == true,
+      createdAt: DateTime.tryParse('${json['createdAt'] ?? json['created_at']}') ?? DateTime.now(),
       // 0,0 means "not set" — ignore it
       latitude: (lat == null || lng == null || (lat == 0 && lng == 0)) ? null : lat,
       longitude: (lat == null || lng == null || (lat == 0 && lng == 0)) ? null : lng,
@@ -63,9 +64,9 @@ class CustomerAddress {
 
   /// Shorter fallbacks used when the full address cannot be geocoded.
   List<String> get geocodeQueries => [
-        fullText,
-        [addressLine1, city, pinCode].where((e) => e.trim().isNotEmpty).join(', '),
-        [city, pinCode].where((e) => e.trim().isNotEmpty).join(', '),
-        pinCode,
-      ].where((q) => q.trim().isNotEmpty).toSet().toList();
+    fullText,
+    [addressLine1, city, pinCode].where((e) => e.trim().isNotEmpty).join(', '),
+    [city, pinCode].where((e) => e.trim().isNotEmpty).join(', '),
+    pinCode,
+  ].where((q) => q.trim().isNotEmpty).toSet().toList();
 }

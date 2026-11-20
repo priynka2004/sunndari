@@ -109,6 +109,9 @@ class PrimaryButton extends StatelessWidget {
   final bool expand;
   final bool arrow;
 
+  /// Slightly tighter padding, and the label shrinks a little instead of being cut with "…".
+  final bool compact;
+
   const PrimaryButton({
     super.key,
     required this.label,
@@ -119,6 +122,7 @@ class PrimaryButton extends StatelessWidget {
     this.foreground = Colors.white,
     this.expand = false,
     this.arrow = false,
+    this.compact = false,
   });
 
   /// Builds the UI.
@@ -134,7 +138,20 @@ class PrimaryButton extends StatelessWidget {
           const SizedBox(width: 8),
         ],
         Flexible(
-          child: Text(
+          child: compact
+              ? FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              maxLines: 1,
+              style: AiraText.sans(
+                fontSize: small ? 13 : 16,
+                fontWeight: FontWeight.w600,
+                color: foreground,
+              ),
+            ),
+          )
+              : Text(
             label,
             overflow: TextOverflow.ellipsis,
             style: AiraText.sans(
@@ -169,7 +186,7 @@ class PrimaryButton extends StatelessWidget {
             onTap: onTap,
             borderRadius: BorderRadius.circular(999),
             child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: small ? 18 : 24, vertical: small ? 10 : 16),
+              padding: EdgeInsets.symmetric(horizontal: compact ? 14 : (small ? 18 : 24), vertical: small ? 10 : 16),
               child: child,
             ),
           ),
@@ -188,6 +205,9 @@ class GhostButton extends StatelessWidget {
   final Color color;
   final bool expand;
 
+  /// A little smaller (text, icon, side padding); the label shrinks instead of overflowing.
+  final bool compact;
+
   const GhostButton({
     super.key,
     required this.label,
@@ -196,6 +216,7 @@ class GhostButton extends StatelessWidget {
     this.onTap,
     this.color = AiraColors.roseDeep,
     this.expand = false,
+    this.compact = false,
   });
 
   /// Builds the UI.
@@ -209,7 +230,7 @@ class GhostButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         child: Container(
           width: expand ? double.infinity : null,
-          padding: EdgeInsets.symmetric(horizontal: small ? 16 : 22, vertical: small ? 10 : 14),
+          padding: EdgeInsets.symmetric(horizontal: compact ? 10 : (small ? 16 : 22), vertical: small ? 10 : 14),
           decoration: BoxDecoration(
             color: AiraColors.pinkFill.withOpacity(0.7),
             border: Border.all(color: AiraColors.pinkBorder, width: 1.2),
@@ -221,12 +242,24 @@ class GhostButton extends StatelessWidget {
             children: [
               if (icon != null) ...[
                 Icon(icon, size: small ? 12 : 18, color: color),
-                const SizedBox(width: 8),
+                SizedBox(width: compact ? 6 : 8),
               ],
-              Text(
-                label,
-                style: AiraText.sans(fontSize: small ? 11.5 : 14.5, fontWeight: FontWeight.w600, color: color),
-              ),
+              if (compact)
+                Flexible(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      style: AiraText.sans(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+                    ),
+                  ),
+                )
+              else
+                Text(
+                  label,
+                  style: AiraText.sans(fontSize: small ? 11.5 : 14.5, fontWeight: FontWeight.w600, color: color),
+                ),
             ],
           ),
         ),
@@ -503,48 +536,48 @@ class SunndariBell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Messages — opens the list of customers; tap a customer to open the chat
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            // Navigates to MessagesScreen
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MessagesScreen())),
-            child: const Padding(
-              padding: EdgeInsets.all(8),
-              child: Icon(Icons.chat_bubble_outline_rounded, size: 28, color: AiraColors.roseDeep),
-            ),
-          ),
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onTap ??
-                // Navigates to NotificationsScreen
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      // Messages — opens the list of customers; tap a customer to open the chat
+      GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        // Navigates to MessagesScreen
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MessagesScreen())),
+        child: const Padding(
+          padding: EdgeInsets.all(8),
+          child: Icon(Icons.chat_bubble_outline_rounded, size: 28, color: AiraColors.roseDeep),
+        ),
+      ),
+      GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap ??
+            // Navigates to NotificationsScreen
                 () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NotificationsScreen())),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: ValueListenableBuilder<bool>(
-                valueListenable: NotificationBadge.instance.hasUnread,
-                builder: (_, hasUnread, __) => Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    const Icon(Icons.notifications_none_rounded, size: 30, color: AiraColors.roseDeep),
-                    if (unread > 0 || hasUnread)
-                      Positioned(
-                        right: -1,
-                        top: -1,
-                        child: Container(
-                          width: 9,
-                          height: 9,
-                          decoration: const BoxDecoration(color: AiraColors.rose, shape: BoxShape.circle),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: ValueListenableBuilder<bool>(
+            valueListenable: NotificationBadge.instance.hasUnread,
+            builder: (_, hasUnread, __) => Stack(
+              clipBehavior: Clip.none,
+              children: [
+                const Icon(Icons.notifications_none_rounded, size: 30, color: AiraColors.roseDeep),
+                if (unread > 0 || hasUnread)
+                  Positioned(
+                    right: -1,
+                    top: -1,
+                    child: Container(
+                      width: 9,
+                      height: 9,
+                      decoration: const BoxDecoration(color: AiraColors.rose, shape: BoxShape.circle),
+                    ),
+                  ),
+              ],
             ),
           ),
-        ],
-      );
+        ),
+      ),
+    ],
+  );
 }
 
 /// Header for the main tab pages (Home, Profile, Calendar...): page title on the left and the
@@ -617,7 +650,7 @@ class SunndariAppBar extends StatelessWidget {
       child: Row(
         children: [
           if (onBack != null)
-            // +4 so the chip's left edge lines up with the 20px page heading below it.
+          // +4 so the chip's left edge lines up with the 20px page heading below it.
             Padding(padding: const EdgeInsets.only(left: 4), child: SunndariBackChip(onTap: onBack!)),
           const Spacer(),
           if (right != null) right,

@@ -57,9 +57,12 @@ class ArtistService {
         'media_type': data.mediaType.name,
         'sub_category_id': data.subCategoryId.toString(),
         if (data.caption != null) 'caption': data.caption!,
-        if (data.isWorkSample) 'is_work_sample': 'true',
+        // The server only allows work samples to be images (a video with this flag gets a 400).
+        if (data.isWorkSample && data.mediaType.name == 'image') 'is_work_sample': 'true',
       },
       files: [UploadFile('file', data.file.path, filename: data.file.name)],
+      // Videos can be up to 300 MB now — give the upload time to finish on a slow connection.
+      timeout: data.mediaType.name == 'video' ? const Duration(minutes: 15) : const Duration(seconds: 120),
     );
   }
 
@@ -238,6 +241,30 @@ class ArtistService {
   /// API: POST /artists/availability/block/add/
   Future<void> addBlock(AddBlock data) async {
     await _apiService.post(ApiEndpoints.artistsAvailabilityBlockAdd, data: data.toJson());
+  }
+
+  /// The artist's own day as customers see it: the exact bookable start times, made by the server
+  /// (every 30 minutes, with buffers and Home Visit chains). Never cached.
+  /// API: GET /artists/availability/slots/?booking_date=dd-mm-yy[&package_id=][&addon_ids=3,7][&location_type_id=]
+  Future<Map<String, dynamic>> getAvailabilitySlots({
+    required DateTime date,
+    int? packageId,
+    List<int> addonIds = const [],
+    int? locationTypeId,
+  }) async {
+    String two(int n) => n.toString().padLeft(2, '0');
+    final response = await _apiService.get(
+      ApiEndpoints.artistsAvailabilitySlots,
+      queryParameters: {
+        'booking_date': '${two(date.day)}-${two(date.month)}-${two(date.year % 100)}',
+        if (packageId != null) 'package_id': '$packageId',
+        if (addonIds.isNotEmpty) 'addon_ids': addonIds.join(','),
+        if (locationTypeId != null) 'location_type_id': '$locationTypeId',
+      },
+    );
+    final j = jsonDecode(response.body);
+    final data = j is Map ? j['data'] : null;
+    return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
   }
 
   /// Gets all blocks.

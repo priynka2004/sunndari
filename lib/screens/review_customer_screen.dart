@@ -72,7 +72,8 @@ class _ReviewCustomerScreenState extends State<ReviewCustomerScreen> {
   final List<XFile> _photos = [];
   String? _photoError;
 
-  /// Lets the artist pick makeup photos from the gallery (up to [_maxPhotos]).
+  /// Takes a makeup photo with the camera (one per tap, up to [_maxPhotos]) — not picked from the gallery.
+  /// The original is sent as it is; the server shrinks it.
   Future<void> _pickPhotos() async {
     try {
       final room = _maxPhotos - _photos.length;
@@ -80,13 +81,10 @@ class _ReviewCustomerScreenState extends State<ReviewCustomerScreen> {
         AppFeedback.showInfo(context, 'You Can Add Up To $_maxPhotos Photos');
         return;
       }
-      final picked = await ImagePicker().pickMultiImage(imageQuality: 85);
-      if (picked.isEmpty || !mounted) return;
-      if (picked.length > room) AppFeedback.showInfo(context, 'Only $_maxPhotos Photos Can Be Added');
+      final shot = await ImagePicker().pickImage(source: ImageSource.camera);
+      if (shot == null || !mounted) return;
       setState(() {
-        for (final x in picked.take(room)) {
-          if (!_photos.any((e) => e.path == x.path)) _photos.add(x);
-        }
+        if (!_photos.any((e) => e.path == shot.path)) _photos.add(shot);
         _photoError = null;
       });
     } catch (e) {
@@ -299,7 +297,7 @@ class _ReviewCustomerScreenState extends State<ReviewCustomerScreen> {
                                         borderRadius: BorderRadius.circular(8),
                                         border: Border.all(color: AiraColors.pinkBorder, width: 1.1),
                                       ),
-                                      child: const Icon(Icons.add_photo_alternate_outlined, size: 28, color: AiraColors.roseDeep),
+                                      child: const Icon(Icons.photo_camera_outlined, size: 28, color: AiraColors.roseDeep),
                                     ),
                                   ),
                               ],

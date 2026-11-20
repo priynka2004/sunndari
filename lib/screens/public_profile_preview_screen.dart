@@ -23,6 +23,8 @@ import '../utils/media_url.dart';
 import '../utils/service_locator.dart';
 import '../utils/experience.dart';
 import '../widgets/common.dart';
+import '../widgets/video_viewer.dart';
+import '../widgets/video_thumbnail.dart';
 
 /// SCREEN: Public Profile Preview — what customers see (services, portfolio, about).
 class PublicProfilePreviewScreen extends StatefulWidget {
@@ -86,7 +88,7 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
         final order = await ArtistPageLocal.portfolioOrder();
         // Work samples (photos added during onboarding) are part of the public portfolio too — hiding them made
         // an artist with 6 photos see only 1 here.
-        _photos = ArtistPageLocal.applyOrder<Portfolio>(r.data.where((p) => p.isActive).toList(), order, (p) => p.portfolioId);
+        _photos = ArtistPageLocal.applyOrder<Portfolio>(r.data.where((p) => p.isActive && !(_isVideo(p) && (p.isProcessing || p.processingFailed))).toList(), order, (p) => p.portfolioId);
       } catch (_) {}
       try {
         // API call: coreService.getAllServiceSubCategories → GET /core/service-sub-category/get_all/ (photo category names)
@@ -324,18 +326,18 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
 
   /// Small category label drawn over the bottom of a photo.
   Widget _catLabel(String text) => Positioned(
-        left: 0,
-        right: 0,
-        bottom: 0,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          color: Colors.black45,
-          child: Text(text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AiraText.sans(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white)),
-        ),
-      );
+    left: 0,
+    right: 0,
+    bottom: 0,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      color: Colors.black45,
+      child: Text(text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AiraText.sans(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white)),
+    ),
+  );
 
   /// Category of a photo: the service name, else its caption, else empty.
   String _photoCategory(Portfolio p) {
@@ -343,8 +345,28 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
     return n.isNotEmpty ? n : (p.caption ?? '').trim();
   }
 
-  /// Opens photo.
+  bool _isVideo(Portfolio p) => p.mediaType.toLowerCase().contains('video');
+
+  /// Grid thumbnail: a photo, or a video's still frame with a play button on top.
+  Widget _thumb(Portfolio p) {
+    if (!_isVideo(p)) return _netImage(p.fileUrl);
+    return Stack(fit: StackFit.expand, children: [
+      VideoThumbnail(
+        key: ValueKey(p.fileUrl),
+        url: resolveMediaUrl(p.fileUrl) ?? p.fileUrl,
+        posterUrl: (p.posterUrl ?? '').isEmpty ? null : resolveMediaUrl(p.posterUrl!),
+      ),
+      const Center(child: Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 38)),
+    ]);
+  }
+
+  /// Opens photo (or plays the video).
   void _viewPhoto(Portfolio p) {
+    if (_isVideo(p)) {
+      final url = resolveMediaUrl(p.fileUrl);
+      if (url != null) showVideoViewer(context, url: url, title: _photoCategory(p));
+      return;
+    }
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
@@ -688,7 +710,7 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
     if (_photos.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 14),
-        child: Text('Portfolio Photos Will Appear Here.', style: AiraText.sans(color: AiraColors.charcoalSoft)),
+        child: Text('Portfolio Photos And Videos Will Appear Here.', style: AiraText.sans(color: AiraColors.charcoalSoft)),
       );
     }
     final first = _photos.take(3).toList();
@@ -703,7 +725,7 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: Stack(fit: StackFit.expand, children: [
-                    _netImage(first[i].fileUrl),
+                    _thumb(first[i]),
                     if (_photoCategory(first[i]).isNotEmpty) _catLabel(_photoCategory(first[i])),
                   ]),
                 ),
@@ -745,7 +767,7 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
     if (_photos.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(32),
-        child: Center(child: Text('No Photos Yet.', style: AiraText.sans(color: AiraColors.charcoalSoft))),
+        child: Center(child: Text('No Photos Or Videos Yet.', style: AiraText.sans(color: AiraColors.charcoalSoft))),
       );
     }
     return Padding(
@@ -764,7 +786,7 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: Stack(fit: StackFit.expand, children: [
-                  _netImage(p.fileUrl),
+                  _thumb(p),
                   if (_photoCategory(p).isNotEmpty) _catLabel(_photoCategory(p)),
                 ]),
               ),
@@ -798,14 +820,14 @@ class _PublicProfilePreviewScreenState extends State<PublicProfilePreviewScreen>
     final days = _schedule.isEmpty
         ? 'Not Set Yet'
         : _schedule.map((d) => _dayNames[((d['dayOfWeek'] as num?)?.toInt() ?? 0).clamp(0, 6)]).join(', ');
-    final years = _profile?.yearsExperience ?? 0;
+    final experienceText = experienceDisplay(rangeKey: _profile?.experienceRange, years: _profile?.yearsExperience ?? 0);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_bio.isNotEmpty) row(Icons.person_outline_rounded, 'About', _bio),
-          if (years > 0) row(Icons.workspace_premium_outlined, 'Experience', experienceLabelFromYears(years)),
+          if (experienceText != null) row(Icons.workspace_premium_outlined, 'Experience', experienceText),
           if (_extra.specialities.isNotEmpty) row(Icons.brush_outlined, 'Specialities', _extra.specialities.join(', ')),
           row(Icons.home_outlined, 'Where I Work', _loc.venueLabel),
           row(Icons.location_on_outlined, 'Service Areas', _loc.areas.isEmpty ? (_city.isEmpty ? 'Not Set Yet' : _city) : _loc.areas.join(', ')),

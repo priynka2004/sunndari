@@ -17,6 +17,8 @@ import '../utils/artist_page_data.dart';
 import '../utils/experience.dart';
 import '../utils/media_url.dart';
 import '../widgets/common.dart';
+import '../widgets/video_viewer.dart';
+import '../widgets/video_thumbnail.dart';
 
 /// Package as returned by the public API.
 class _PubPackage {
@@ -41,18 +43,18 @@ class _PubPackage {
   });
 
   factory _PubPackage.fromJson(Map<String, dynamic> j) => _PubPackage(
-        packageId: (j['packageId'] as num?)?.toInt() ?? 0,
-        name: '${j['name'] ?? ''}',
-        price: double.tryParse('${j['price']}') ?? 0,
-        durationMinutes: (j['durationMinutes'] as num?)?.toInt() ?? 0,
-        makeupType: '${j['makeupType'] ?? ''}',
-        brands: ((j['brands'] as List?) ?? const []).map((e) => '$e').toList(),
-        photoUrl: j['photoUrl']?.toString(),
-        inclusions: ((j['inclusions'] as List?) ?? const [])
-            .map((e) => e is Map ? '${e['inclusionText'] ?? e['text'] ?? ''}' : '$e')
-            .where((e) => e.trim().isNotEmpty)
-            .toList(),
-      );
+    packageId: (j['packageId'] as num?)?.toInt() ?? 0,
+    name: '${j['name'] ?? ''}',
+    price: double.tryParse('${j['price']}') ?? 0,
+    durationMinutes: (j['durationMinutes'] as num?)?.toInt() ?? 0,
+    makeupType: '${j['makeupType'] ?? ''}',
+    brands: ((j['brands'] as List?) ?? const []).map((e) => '$e').toList(),
+    photoUrl: j['photoUrl']?.toString(),
+    inclusions: ((j['inclusions'] as List?) ?? const [])
+        .map((e) => e is Map ? '${e['inclusionText'] ?? e['text'] ?? ''}' : '$e')
+        .where((e) => e.trim().isNotEmpty)
+        .toList(),
+  );
 }
 
 /// Portfolio photo as returned by the public API.
@@ -60,7 +62,9 @@ class _PubPhoto {
   final String fileUrl;
   final String? caption;
   final String? category; // service / category name when the API sends one
-  const _PubPhoto(this.fileUrl, this.caption, [this.category]);
+  final bool isVideo;
+  final String? posterUrl; // still frame of a video
+  const _PubPhoto(this.fileUrl, this.caption, [this.category, this.isVideo = false, this.posterUrl]);
 
   /// Label shown on the photo: category name, else caption.
   String get label => ((category ?? '').trim().isNotEmpty ? category! : (caption ?? '')).trim();
@@ -86,6 +90,7 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
   String _bio = '';
   String _city = '';
   int _years = 0;
+  String? _experienceRange; // exactly as the artist chose it (0-1 … 10+), null until picked
   bool _accepting = true;
   String? _profilePhotoUrl;
   String? _coverPhotoUrl;
@@ -127,6 +132,7 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
       _bio = '${d['bio'] ?? ''}'.trim();
       _city = '${d['city'] ?? ''}'.trim();
       _years = (d['yearsExperience'] as num?)?.toInt() ?? 0;
+      _experienceRange = d['experienceRange']?.toString();
       _accepting = d['isAcceptingBookings'] != false;
       _profilePhotoUrl = d['profilePhotoUrl']?.toString();
       _coverPhotoUrl = d['coverPhotoUrl']?.toString();
@@ -136,14 +142,27 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
           .whereType<Map>()
           .map((e) => _PubPackage.fromJson(Map<String, dynamic>.from(e)))
           .toList();
+      // Photos AND videos. A video is shown only once the server has finished shrinking it.
       _photos = ((d['portfolio'] as List?) ?? const [])
           .whereType<Map>()
-          .where((e) => (e['mediaType'] ?? 'image') == 'image' && e['fileUrl'] != null)
-          .map((e) => _PubPhoto(
-                '${e['fileUrl']}',
-                e['caption']?.toString(),
-                (e['subCategoryName'] ?? e['serviceName'] ?? e['categoryName'])?.toString(),
-              ))
+          .where((e) {
+        if (e['fileUrl'] == null) return false;
+        final video = '${e['mediaType'] ?? 'image'}'.toLowerCase().contains('video');
+        if (!video) return true;
+        final st = '${e['processingStatus'] ?? 'ready'}'.toLowerCase();
+        return st == 'ready';
+      })
+          .map((e) {
+        final video = '${e['mediaType'] ?? 'image'}'.toLowerCase().contains('video');
+        final poster = '${e['posterUrl'] ?? ''}'.trim();
+        return _PubPhoto(
+          '${e['fileUrl']}',
+          e['caption']?.toString(),
+          (e['subCategoryName'] ?? e['serviceName'] ?? e['categoryName'])?.toString(),
+          video,
+          poster.isEmpty ? null : poster,
+        );
+      })
           .toList();
 
       // Optional fields (only if the backend adds them later).
@@ -157,7 +176,12 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
       }
     } catch (e) {
       debugPrint('Public profile error = $e');
-      _error = e.toString().replaceFirst('Exception: ', '');
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      final low = msg.toLowerCase();
+      // A hidden artist (not approved / unpaid / bookings off / switched off by an admin) comes back as "Artist not found".
+      _error = (low.contains('artist not found') || low.contains('no matching record'))
+          ? 'This Artist Is Not Available Right Now. Please Go Back And Search Again.'
+          : msg;
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -272,6 +296,11 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
     ..showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating, backgroundColor: AiraColors.roseDeep));
 
   void _viewPhoto(_PubPhoto p) {
+    if (p.isVideo) {
+      final url = resolveMediaUrl(p.fileUrl);
+      if (url != null) showVideoViewer(context, url: url, title: p.label);
+      return;
+    }
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
@@ -352,58 +381,58 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
   }
 
   Widget _identity() => Padding(
-        padding: const EdgeInsets.fromLTRB(120, 10, 16, 0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    padding: const EdgeInsets.fromLTRB(120, 10, 16, 0),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(_displayName, style: AiraText.serif(fontSize: 21, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
+        const SizedBox(height: 4),
+        Row(
           children: [
-            Text(_displayName, style: AiraText.serif(fontSize: 21, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                if (_cityLine.isNotEmpty) ...[
-                  const Icon(Icons.location_on_outlined, size: 15, color: AiraColors.rose),
-                  const SizedBox(width: 2),
-                  Flexible(child: Text(_cityLine, style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoal))),
-                  const SizedBox(width: 8),
-                ],
-                if (_accepting)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(color: const Color(0xFFE3F5EA), borderRadius: BorderRadius.circular(999)),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.circle, size: 7, color: AiraColors.success),
-                        const SizedBox(width: 4),
-                        Text('Available For Bookings', style: AiraText.sans(fontSize: 10, fontWeight: FontWeight.w600, color: AiraColors.charcoal)),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
+            if (_cityLine.isNotEmpty) ...[
+              const Icon(Icons.location_on_outlined, size: 15, color: AiraColors.rose),
+              const SizedBox(width: 2),
+              Flexible(child: Text(_cityLine, style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoal))),
+              const SizedBox(width: 8),
+            ],
+            if (_accepting)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(color: const Color(0xFFE3F5EA), borderRadius: BorderRadius.circular(999)),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.circle, size: 7, color: AiraColors.success),
+                    const SizedBox(width: 4),
+                    Text('Available For Bookings', style: AiraText.sans(fontSize: 10, fontWeight: FontWeight.w600, color: AiraColors.charcoal)),
+                  ],
+                ),
+              ),
           ],
         ),
-      );
+      ],
+    ),
+  );
 
   Widget _about0() => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (_bio.isNotEmpty) Text(_bio, maxLines: 3, overflow: TextOverflow.ellipsis, style: AiraText.sans(fontSize: 13, color: AiraColors.charcoal, height: 1.4)),
-            if (_venueLabel != null) ...[
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  const Icon(Icons.home_outlined, size: 16, color: AiraColors.rose),
-                  const SizedBox(width: 6),
-                  Text(_venueLabel!, style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft)),
-                ],
-              ),
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_bio.isNotEmpty) Text(_bio, maxLines: 3, overflow: TextOverflow.ellipsis, style: AiraText.sans(fontSize: 13, color: AiraColors.charcoal, height: 1.4)),
+        if (_venueLabel != null) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(Icons.home_outlined, size: 16, color: AiraColors.rose),
+              const SizedBox(width: 6),
+              Text(_venueLabel!, style: AiraText.sans(fontSize: 12.5, color: AiraColors.charcoalSoft)),
             ],
-          ],
-        ),
-      );
+          ),
+        ],
+      ],
+    ),
+  );
 
   Widget _tabBar() {
     const tabs = [('Services', Icons.brush_outlined), ('Portfolio', Icons.photo_library_outlined), ('About', Icons.description_outlined)];
@@ -570,26 +599,39 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
     );
   }
 
+  /// Grid thumbnail: a photo, or a video's still frame with a play button on top.
+  Widget _thumb(_PubPhoto p) {
+    if (!p.isVideo) return _netImage(p.fileUrl);
+    return Stack(fit: StackFit.expand, children: [
+      VideoThumbnail(
+        key: ValueKey(p.fileUrl),
+        url: resolveMediaUrl(p.fileUrl) ?? p.fileUrl,
+        posterUrl: p.posterUrl == null ? null : resolveMediaUrl(p.posterUrl!),
+      ),
+      const Center(child: Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 38)),
+    ]);
+  }
+
   /// Small category label drawn over the bottom of a photo.
   Widget _catLabel(String text) => Positioned(
-        left: 0,
-        right: 0,
-        bottom: 0,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          color: Colors.black45,
-          child: Text(text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AiraText.sans(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white)),
-        ),
-      );
+    left: 0,
+    right: 0,
+    bottom: 0,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      color: Colors.black45,
+      child: Text(text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AiraText.sans(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white)),
+    ),
+  );
 
   Widget _photoRow() {
     if (_photos.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 14),
-        child: Text('Portfolio Photos Will Appear Here.', style: AiraText.sans(color: AiraColors.charcoalSoft)),
+        child: Text('Portfolio Photos And Videos Will Appear Here.', style: AiraText.sans(color: AiraColors.charcoalSoft)),
       );
     }
     final first = _photos.take(3).toList();
@@ -604,7 +646,7 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: Stack(fit: StackFit.expand, children: [
-                    _netImage(first[i].fileUrl),
+                    _thumb(first[i]),
                     if (first[i].label.isNotEmpty) _catLabel(first[i].label),
                   ]),
                 ),
@@ -620,32 +662,32 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
   String get _areasText => _areas.isEmpty ? (_city.isEmpty ? 'Not Set Yet' : _city) : _areas.join(', ');
 
   Widget _serviceAreaCard() => Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: AiraColors.pinkFill, borderRadius: BorderRadius.circular(12), border: Border.all(color: AiraColors.hair)),
-        child: Row(
-          children: [
-            const SunndariIconBubble(icon: Icons.location_on_outlined, size: 40),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Service Area', style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
-                  Text(
-                      '$_areasText${(_travelLabel != null && _travelLabel != 'Free') ? ' • Travel charges shown before booking' : ''}',
-                      style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft, height: 1.35)),
-                ],
-              ),
-            ),
-          ],
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(color: AiraColors.pinkFill, borderRadius: BorderRadius.circular(12), border: Border.all(color: AiraColors.hair)),
+    child: Row(
+      children: [
+        const SunndariIconBubble(icon: Icons.location_on_outlined, size: 40),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Service Area', style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w800, color: AiraColors.roseDeep)),
+              Text(
+                  '$_areasText${(_travelLabel != null && _travelLabel != 'Free') ? ' • Travel charges shown before booking' : ''}',
+                  style: AiraText.sans(fontSize: 12, color: AiraColors.charcoalSoft, height: 1.35)),
+            ],
+          ),
         ),
-      );
+      ],
+    ),
+  );
 
   Widget _portfolioTab() {
     if (_photos.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(32),
-        child: Center(child: Text('No Photos Yet.', style: AiraText.sans(color: AiraColors.charcoalSoft))),
+        child: Center(child: Text('No Photos Or Videos Yet.', style: AiraText.sans(color: AiraColors.charcoalSoft))),
       );
     }
     return Padding(
@@ -664,7 +706,7 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: Stack(fit: StackFit.expand, children: [
-                  _netImage(p.fileUrl),
+                  _thumb(p),
                   if (p.label.isNotEmpty) _catLabel(p.label),
                 ]),
               ),
@@ -676,31 +718,32 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
 
   Widget _aboutTab() {
     Widget row(IconData i, String t, String v) => Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SunndariIconBubble(icon: i, size: 36),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(t, style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoalSoft)),
-                    Text(v, style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w600, color: AiraColors.charcoal, height: 1.35)),
-                  ],
-                ),
-              ),
-            ],
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SunndariIconBubble(icon: i, size: 36),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(t, style: AiraText.sans(fontSize: 11.5, color: AiraColors.charcoalSoft)),
+                Text(v, style: AiraText.sans(fontSize: 13.5, fontWeight: FontWeight.w600, color: AiraColors.charcoal, height: 1.35)),
+              ],
+            ),
           ),
-        );
+        ],
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_bio.isNotEmpty) row(Icons.person_outline_rounded, 'About', _bio),
-          if (_years > 0) row(Icons.workspace_premium_outlined, 'Experience', experienceLabelFromYears(_years)),
+          if (experienceDisplay(rangeKey: _experienceRange, years: _years) != null)
+            row(Icons.workspace_premium_outlined, 'Experience', experienceDisplay(rangeKey: _experienceRange, years: _years)!),
           if (_specialities.isNotEmpty) row(Icons.brush_outlined, 'Specialities', _specialities.join(', ')),
           if (_venueLabel != null) row(Icons.home_outlined, 'Where I Work', _venueLabel!),
           row(Icons.location_on_outlined, 'Service Areas', _areasText),
@@ -712,57 +755,57 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
   }
 
   Widget _bottomBar() => Container(
-        padding: EdgeInsets.fromLTRB(16, 10, 16, 10 + MediaQuery.of(context).padding.bottom),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 12, offset: const Offset(0, -3))],
-        ),
-        child: Row(
-          children: [
-            GestureDetector(
-              onTap: () => showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  backgroundColor: AiraColors.bg,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-                  title: Text('Preview Only', style: AiraText.serif(fontSize: 19)),
-                  content: const Text('This Is How Clients Will See This Page. Booking Is Disabled In The Preview.'),
-                  actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Got It'))],
-                ),
-              ),
-              child: Row(
-                children: [
-                  Text('Preview Only', style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
-                  const SizedBox(width: 4),
-                  const Icon(Icons.info_outline_rounded, size: 16, color: AiraColors.roseDeep),
-                ],
-              ),
+    padding: EdgeInsets.fromLTRB(16, 10, 16, 10 + MediaQuery.of(context).padding.bottom),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 12, offset: const Offset(0, -3))],
+    ),
+    child: Row(
+      children: [
+        GestureDetector(
+          onTap: () => showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: AiraColors.bg,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              title: Text('Preview Only', style: AiraText.serif(fontSize: 19)),
+              content: const Text('This Is How Clients Will See This Page. Booking Is Disabled In The Preview.'),
+              actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Got It'))],
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: PrimaryButton(label: 'Check Availability', icon: Icons.calendar_month_outlined, expand: true, onTap: _checkAvailability),
-            ),
-          ],
-        ),
-      );
-
-  Widget _errorView() => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
+          ),
+          child: Row(
             children: [
-              Align(alignment: Alignment.centerLeft, child: SunndariBackChip(onTap: () => Navigator.of(context).maybePop())),
-              const Spacer(),
-              const Icon(Icons.person_search_outlined, size: 48, color: AiraColors.rose),
-              const SizedBox(height: 12),
-              Text(_error ?? 'Profile Not Found', textAlign: TextAlign.center, style: AiraText.sans(fontSize: 14, color: AiraColors.charcoalSoft)),
-              const SizedBox(height: 16),
-              PrimaryButton(label: 'Try Again', small: true, onTap: _load),
-              const Spacer(),
+              Text('Preview Only', style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w700, color: AiraColors.roseDeep)),
+              const SizedBox(width: 4),
+              const Icon(Icons.info_outline_rounded, size: 16, color: AiraColors.roseDeep),
             ],
           ),
         ),
-      );
+        const SizedBox(width: 14),
+        Expanded(
+          child: PrimaryButton(label: 'Check Availability', icon: Icons.calendar_month_outlined, expand: true, onTap: _checkAvailability),
+        ),
+      ],
+    ),
+  );
+
+  Widget _errorView() => SafeArea(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        children: [
+          Align(alignment: Alignment.centerLeft, child: SunndariBackChip(onTap: () => Navigator.of(context).maybePop())),
+          const Spacer(),
+          const Icon(Icons.person_search_outlined, size: 48, color: AiraColors.rose),
+          const SizedBox(height: 12),
+          Text(_error ?? 'Profile Not Found', textAlign: TextAlign.center, style: AiraText.sans(fontSize: 14, color: AiraColors.charcoalSoft)),
+          const SizedBox(height: 16),
+          PrimaryButton(label: 'Try Again', small: true, onTap: _load),
+          const Spacer(),
+        ],
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -771,31 +814,31 @@ class _PublicArtistProfileScreenState extends State<PublicArtistProfileScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: AiraColors.rose))
           : _error != null
-              ? _errorView()
-              : Column(
-                  children: [
-                    Expanded(
-                      child: RefreshIndicator(
-                        color: AiraColors.rose,
-                        onRefresh: _load,
-                        child: ListView(
-                          padding: EdgeInsets.zero,
-                          children: [
-                            _header(),
-                            _identity(),
-                            _about0(),
-                            _tabBar(),
-                            if (_tab == 0) _servicesTab(),
-                            if (_tab == 1) _portfolioTab(),
-                            if (_tab == 2) _aboutTab(),
-                            const SizedBox(height: 24),
-                          ],
-                        ),
-                      ),
-                    ),
-                    _bottomBar(),
-                  ],
-                ),
+          ? _errorView()
+          : Column(
+        children: [
+          Expanded(
+            child: RefreshIndicator(
+              color: AiraColors.rose,
+              onRefresh: _load,
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  _header(),
+                  _identity(),
+                  _about0(),
+                  _tabBar(),
+                  if (_tab == 0) _servicesTab(),
+                  if (_tab == 1) _portfolioTab(),
+                  if (_tab == 2) _aboutTab(),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
+          ),
+          _bottomBar(),
+        ],
+      ),
     );
   }
 }

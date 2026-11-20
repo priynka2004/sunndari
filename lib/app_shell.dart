@@ -20,6 +20,7 @@ import 'screens/auth/login_screen.dart';
 import 'utils/service_locator.dart';
 import 'utils/app_session.dart';
 import 'utils/app_feedback.dart';
+import 'utils/accepting_bookings.dart';
 import 'utils/notification_badge.dart';
 import 'services/push_notification_service.dart';
 import 'services/service_announcement_service.dart';
@@ -244,6 +245,8 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
       packageId: rest.packageId,
       locationTypeId: rest.locationTypeId,
       addressId: rest.addressId,
+      address: rest.address,
+      salonAddress: rest.salonAddress,
       bookingDate: rest.bookingDate,
       startTime: rest.startTime,
       endTime: rest.endTime,
@@ -266,6 +269,11 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
       travelTimeMinutes: rest.travelTimeMinutes,
       returnBufferMinutes: rest.returnBufferMinutes,
       addons: rest.addons,
+      // The server's words for the status belong to the status they were read with: when the live status
+      // moved on, use the live one (or none) instead of a stale label.
+      statusLabel: live.statusId == rest.statusId ? (rest.statusLabel ?? live.statusLabel) : live.statusLabel,
+      paymentStatus: live.paymentStatus ?? rest.paymentStatus,
+      completionProof: live.completionProof ?? rest.completionProof,
     );
   }
 
@@ -296,11 +304,15 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
       final bookings = (results[1] as List<Booking>).where((b) => !_paymentBlockedIds.contains(b.bookingId)).toList();
       _unconfirmedLiveIds.removeWhere((id) => bookings.any((b) => b.bookingId == id));
 
-      final List<StatusItem> statuses = results[2] as List<StatusItem>;
+      final List<StatusItem> fetchedStatuses = results[2] as List<StatusItem>;
+      // If the statuses call failed (empty), keep the last known list: with no statuses every booking
+      // would map to "open" and vanish from all Bookings tabs.
+      final List<StatusItem> statuses = fetchedStatuses.isNotEmpty ? fetchedStatuses : _bookingStatuses;
 
       if (!mounted) return;
       setState(() {
         _profile = profile;
+        acceptingBookingsNotifier.value = profile.isAcceptingBookings;
         _bookings = bookings;
         _bookingStatuses = statuses;
         _hasClash = _detectClash(bookings, statuses);
@@ -435,10 +447,13 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
       date: b.bookingDate,
       time: _formatTime(b.startTime),
       rawStartTime: b.startTime,
+      rawEndTime: b.endTime,
       client: _customerNames[b.customerId] ?? 'Customer',
       service: _packageNames[b.packageId] ?? 'Service',
       status: _mapStatus(b.statusId, cancelledBy: b.cancelledBy),
       amount: b.totalAmount,
+      statusLabel: b.statusLabel,
+      paymentStatus: b.paymentStatus,
     ))
         .toList();
   }
@@ -522,6 +537,14 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
         _showToast('This Booking Is Waiting For The Customer\'s Payment');
         return;
       }
+      // Accepting a request while the artist's own bookings switch is off → offer to switch it on.
+      if (next == SlotStatus.confirmed && mounted) {
+        final turnedOn = await offerTurnOnBookings(context, e);
+        if (turnedOn != null) {
+          if (turnedOn) await _loadData();
+          return;
+        }
+      }
       _showErrorToast(e, onRetry: () => _updateBookingStatus(slot, next, reason: reason));
     }
   }
@@ -545,7 +568,7 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
   Future<void> _postPortfolio() async {
     try {
       final picker = ImagePicker();
-      final xfile = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+      final xfile = await picker.pickImage(source: ImageSource.gallery); // original photo — the server shrinks it
       if (xfile == null) return;
 
       int subCategoryId = 1;
@@ -608,8 +631,8 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
     // Home "Business Overview": ALL THREE numbers use the same scope = this month
     // (Earnings is the same figure as Earnings tab → This Month → Net Earnings).
     final monthBookings = stats.thisMonthAppointments;
-    final grossMonth = BookingStats(monthBookings, _bookingStatuses).totalEarnings;
-    final netMonth = grossMonth - (grossMonth * (_profile?.commissionRate ?? 0) / 100);
+    // NET (gross − platform fee) straight from the bookings' own net amounts — never shows a gross figure first.
+    final netMonth = BookingStats(monthBookings, _bookingStatuses).netEarnings(_profile?.commissionRate ?? 0);
 
     late final Widget mainScreen;
     switch (_screen) {
@@ -669,10 +692,13 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
           date: b.bookingDate,
           time: _formatTime(b.startTime),
           rawStartTime: b.startTime,
+          rawEndTime: b.endTime,
           client: _customerNames[b.customerId] ?? 'Customer',
           service: _packageNames[b.packageId] ?? 'Service',
           status: _mapStatus(b.statusId, cancelledBy: b.cancelledBy),
           amount: b.totalAmount,
+          statusLabel: b.statusLabel,
+          paymentStatus: b.paymentStatus,
         )).toList()
           ..sort((a, b) => a.rawStartTime?.compareTo(b.rawStartTime ?? '') ?? 0); // Sort by time
 
@@ -691,7 +717,9 @@ class _AiraAppShellState extends State<AiraAppShell> with WidgetsBindingObserver
           showCompleteProfileBanner: !_loading && _profileIncomplete,
           profileHint: _profileHint,
           todaysBookings: todaysSlots, // PASSING THE DATA HERE
-          acceptingBookings: _profile?.isAcceptingBookings ?? true,
+          acceptingBookings: _profile?.isAcceptingBookings ?? false,
+          acceptingLockedByAdmin: _profile?.acceptingLockedByAdmin ?? false,
+          registrationEligible: _profile?.registrationEligible ?? true,
           onCompleteProfile: () => _navigate('profile'),
           briefingText: todays.isEmpty
               ? "You're All Clear — No Bookings On The Calendar Today."

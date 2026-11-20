@@ -16,20 +16,21 @@ import '../utils/service_locator.dart';
 import 'common.dart';
 
 /// Opens the change-contact flow. Returns true when the contact was replaced.
-Future<bool> showChangeContactSheet(BuildContext context, {required bool isEmail}) async {
+Future<bool> showChangeContactSheet(BuildContext context, {required bool isEmail, String? initialValue}) async {
   final ok = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     backgroundColor: AiraColors.bg,
     shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-    builder: (_) => _ChangeContactSheet(isEmail: isEmail),
+    builder: (_) => _ChangeContactSheet(isEmail: isEmail, initialValue: initialValue),
   );
   return ok == true;
 }
 
 class _ChangeContactSheet extends StatefulWidget {
   final bool isEmail;
-  const _ChangeContactSheet({required this.isEmail});
+  final String? initialValue;
+  const _ChangeContactSheet({required this.isEmail, this.initialValue});
 
   @override
   State<_ChangeContactSheet> createState() => _ChangeContactSheetState();
@@ -43,6 +44,12 @@ class _ChangeContactSheetState extends State<_ChangeContactSheet> {
   String? _error;
   int _cooldown = 0; // seconds until another code can be requested (server allows one per minute)
   Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    if ((widget.initialValue ?? '').isNotEmpty) _value.text = widget.initialValue!;
+  }
 
   @override
   void dispose() {

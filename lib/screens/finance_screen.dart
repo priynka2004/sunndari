@@ -50,6 +50,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
   _Period _period = _Period.thisMonth;
   DateTimeRange? _custom;
   double _commission = 0;
+  bool _commissionLoaded = false; // net is shown only once the fee is known (never gross first, then net)
 
   /// Runs once when the screen opens; starts: _loadCommission().
   @override
@@ -63,8 +64,13 @@ class _FinanceScreenState extends State<FinanceScreen> {
   Future<void> _loadCommission() async {
     try {
       final p = await ServiceLocator.artistService.getProfile();
-      if (mounted) setState(() => _commission = p.commissionRate);
-    } catch (_) {}
+      if (mounted) setState(() {
+        _commission = p.commissionRate;
+        _commissionLoaded = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _commissionLoaded = true);
+    }
   }
 
   DateTimeRange? get _range {
@@ -270,9 +276,11 @@ class _FinanceScreenState extends State<FinanceScreen> {
   Widget build(BuildContext context) {
     final stats = BookingStats(_filtered, widget.statuses);
     final gross = stats.totalEarnings;
-    final fees = gross * _commission / 100;
     const adjustments = 0.0;
-    final net = gross - fees + adjustments;
+    // Net comes from each booking's own net amount (older bookings: commission rate).
+    final ready = _commissionLoaded || _filtered.every((b) => b.netAmount != null);
+    final net = stats.netEarnings(_commission) + adjustments;
+    final fees = gross - stats.netEarnings(_commission);
     const paidOut = 0.0;
     final pending = net - paidOut;
 
@@ -322,7 +330,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  Text(_rs(net), style: AiraText.serif(fontSize: 46, fontWeight: FontWeight.w800)),
+                  Text(ready ? _rs(net) : '…', style: AiraText.serif(fontSize: 46, fontWeight: FontWeight.w800)),
                 ],
               ),
             ],
@@ -333,7 +341,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
           children: [
             Expanded(child: _stat(Icons.account_balance_wallet_outlined, 'Gross Earnings', _rs(gross))),
             const SizedBox(width: 8),
-            Expanded(child: _stat(Icons.percent_rounded, 'Platform Fees', _rs(fees))),
+            Expanded(child: _stat(Icons.percent_rounded, 'Platform Fees', ready ? _rs(fees) : '…')),
             const SizedBox(width: 8),
             Expanded(child: _stat(Icons.tune_rounded, 'Adjustments', _rs(adjustments))),
           ],
@@ -343,7 +351,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
           children: [
             Expanded(child: _stat(Icons.account_balance_outlined, 'Paid Out', _rs(paidOut), wide: true)),
             const SizedBox(width: 8),
-            Expanded(child: _stat(Icons.schedule_rounded, 'Pending Payout', _rs(pending), wide: true)),
+            Expanded(child: _stat(Icons.schedule_rounded, 'Pending Payout', ready ? _rs(pending) : '…', wide: true)),
           ],
         ),
         const SizedBox(height: 10),

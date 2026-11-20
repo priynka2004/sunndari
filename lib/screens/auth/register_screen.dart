@@ -15,6 +15,7 @@ import '../../theme/tokens.dart';
 import '../../utils/app_feedback.dart';
 import '../../utils/approval_status.dart';
 import '../../utils/onboarding_progress.dart';
+import '../../utils/pending_email.dart';
 import '../../utils/service_locator.dart';
 import '../../widgets/common.dart';
 import 'post_login_router.dart';
@@ -196,6 +197,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   /// Converts to secure account.
   void _toSecureAccount(String email, String phone) {
+    // The server saves an email only after a code check, so keep it for the profile's "Verify" button.
+    if (email.isNotEmpty) PendingEmail.save(email);
     // Navigates to SecureAccountScreen
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => SecureAccountScreen(email: email, phone: phone)));
   }

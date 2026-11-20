@@ -119,6 +119,26 @@ class ApiLog {
     }
   }
 
+  static Future<http.Response> post(
+      Uri uri, {
+        Map<String, String>? headers,
+        Object? body,
+        String tag = 'HTTP',
+        Duration timeout = const Duration(seconds: 20),
+      }) async {
+    final id = nextId();
+    final sw = Stopwatch()..start();
+    request(id, 'POST', uri, tag: tag);
+    try {
+      final r = await http.post(uri, headers: headers, body: body).timeout(timeout);
+      response(id, 'POST', uri, r, sw.elapsed, tag: tag);
+      return r;
+    } catch (e) {
+      error(id, 'POST', uri, e, sw.elapsed, tag: tag);
+      rethrow;
+    }
+  }
+
   static void _emit(String header, List<String> lines) {
     final b = StringBuffer('┌─ [$header]\n');
     for (final line in lines) {

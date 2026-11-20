@@ -17,6 +17,7 @@ import '../models/auth/token_refresh.dart';
 import '../models/auth/forgot_password_request.dart';
 import '../models/auth/reset_password_request.dart';
 import '../utils/app_session.dart';
+import '../utils/fcm_token_helper.dart';
 
 /// Auth Service — API/data layer.
 class AuthService {
@@ -35,7 +36,7 @@ class AuthService {
   /// Logs in.
   /// API: POST /auth/login/
   Future<AuthResponse> login(LoginRequest data) async {
-    final response = await _apiService.post(ApiEndpoints.authLogin, data: data.toJson());
+    final response = await _apiService.post(ApiEndpoints.authLogin, data: await FcmTokenHelper.withToken(data.toJson()));
     final auth = _parseAndLog('login', response.body);
     await _persist(auth);
     return auth;
@@ -50,7 +51,7 @@ class AuthService {
   /// Verifies email OTP.
   /// API: POST /auth/email-otp/verify/
   Future<AuthResponse> verifyEmailOtp(EmailOtpVerify data) async {
-    final response = await _apiService.post(ApiEndpoints.authEmailOtpVerify, data: data.toJson());
+    final response = await _apiService.post(ApiEndpoints.authEmailOtpVerify, data: await FcmTokenHelper.withToken(data.toJson()));
     final auth = _parseAndLog('verifyEmailOtp', response.body);
     await _persist(auth);
     return auth;
@@ -65,7 +66,7 @@ class AuthService {
   /// Verifies phone OTP.
   /// API: POST /auth/phone-otp/verify/
   Future<AuthResponse> verifyPhoneOtp(PhoneOtpVerify data) async {
-    final response = await _apiService.post(ApiEndpoints.authPhoneOtpVerify, data: data.toJson());
+    final response = await _apiService.post(ApiEndpoints.authPhoneOtpVerify, data: await FcmTokenHelper.withToken(data.toJson()));
     final auth = _parseAndLog('verifyPhoneOtp', response.body);
     await _persist(auth);
     return auth;
@@ -74,7 +75,7 @@ class AuthService {
   /// Google auth.
   /// API: POST /auth/google/
   Future<AuthResponse> googleAuth(GoogleAuth data) async {
-    final response = await _apiService.post(ApiEndpoints.authGoogle, data: data.toJson());
+    final response = await _apiService.post(ApiEndpoints.authGoogle, data: await FcmTokenHelper.withToken(data.toJson()));
     final auth = _parseAndLog('googleAuth', response.body);
     await _persist(auth);
     return auth;
@@ -83,7 +84,7 @@ class AuthService {
   /// Refreshes token.
   /// API: POST /auth/token/refresh/
   Future<AuthResponse> refreshToken(TokenRefresh data) async {
-    final response = await _apiService.post(ApiEndpoints.authTokenRefresh, data: data.toJson());
+    final response = await _apiService.post(ApiEndpoints.authTokenRefresh, data: await FcmTokenHelper.withToken(data.toJson()));
     final auth = _parseAndLog('refreshToken', response.body);
     await _persist(auth);
     return auth;

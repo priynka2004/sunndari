@@ -7,6 +7,7 @@ import '../../services/deep_link_service.dart';
 import '../../utils/app_feedback.dart';
 import '../../theme/tokens.dart';
 import '../../utils/app_session.dart';
+import '../../utils/app_startup.dart';
 import '../../widgets/common.dart';
 import 'login_screen.dart';
 import 'post_login_router.dart';
@@ -32,6 +33,8 @@ class _SplashScreenState extends State<SplashScreen> {
   Future<void> _bootstrap() async {
     await AppSession.instance.load();
     await Future.delayed(const Duration(milliseconds: 1400));
+    // Firebase / push / deep links start after the first frame; wait for them (at most 6 s) before moving on.
+    await AppStartup.ready.timeout(const Duration(seconds: 6), onTimeout: () {});
     if (!mounted) return;
 
     if (!AppSession.instance.isLoggedIn) {

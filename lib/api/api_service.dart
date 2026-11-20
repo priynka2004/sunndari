@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import '../utils/api_logger.dart';
 import '../utils/app_session.dart';
+import '../utils/fcm_token_helper.dart';
 import 'api_endpoints.dart';
 
 /// A file to upload in a multipart request.
@@ -181,6 +182,7 @@ class ApiService {
       String endpoint, {
         Map<String, String> fields = const {},
         List<UploadFile> files = const [],
+        Duration timeout = _uploadTimeout,
       }) {
     final uri = _buildUri(endpoint, null);
     return _sendWithRetry(
@@ -202,7 +204,7 @@ class ApiService {
       files: [
         for (final f in files) '${f.field}=${f.filename ?? f.path.split('/').last}',
       ],
-      timeout: _uploadTimeout,
+      timeout: timeout,
     );
   }
 
@@ -211,6 +213,7 @@ class ApiService {
       String endpoint, {
         Map<String, String> fields = const {},
         List<UploadFile> files = const [],
+        Duration timeout = _uploadTimeout,
       }) {
     final uri = _buildUri(endpoint, null);
     return _sendWithRetry(
@@ -232,7 +235,7 @@ class ApiService {
       files: [
         for (final f in files) '${f.field}=${f.filename ?? f.path.split('/').last}',
       ],
-      timeout: _uploadTimeout,
+      timeout: timeout,
     );
   }
 
@@ -368,6 +371,8 @@ class ApiService {
     final id = ApiLog.nextId();
     final sw = Stopwatch()..start();
     const tag = 'API/refresh';
+    // The phone's push token goes with every refresh too (the server keeps the old one if it is missing).
+    final refreshBody = await FcmTokenHelper.withToken({'refresh_token': refreshToken});
     ApiLog.request(id, 'POST', uri, tag: tag, body: {'refresh_token': refreshToken});
 
     final http.Response response;
@@ -379,7 +384,7 @@ class ApiService {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: jsonEncode({'refresh_token': refreshToken}),
+        body: jsonEncode(refreshBody),
       )
           .timeout(_requestTimeout));
     } catch (e) {
@@ -468,7 +473,7 @@ class ApiService {
     }
     switch (response.statusCode) {
       case 413:
-        throw Exception('This File Is Too Large. Please Choose A Smaller Photo (Under 5 MB) And Try Again.');
+        throw Exception('This File Is Too Large. Please Choose A Smaller Photo (Under 25 MB) And Try Again.');
       case 415:
         throw Exception('This File Type Is Not Supported. Please Upload A JPG Or PNG Photo.');
       case 408:

@@ -34,11 +34,17 @@ class ArtistProfile {
   final String? displayName;
   final String? dateOfBirth; // YYYY-MM-DD (own profile only)
   final String? instagramUrl;
-  final String? profileType; // freelance | studio
+  final String? profileType; // freelance | studio — first item of [profileTypes]
+  /// Work types: one or both of `freelance` / `studio` (the server keeps `profileType` for older apps).
+  final List<String> profileTypes;
+  /// One of `0-1`, `1-3`, `3-5`, `5-10`, `10+` — or null until the artist picks one (then use [yearsExperience]).
+  final String? experienceRange;
   final List<int> specialities; // sub-category ids
   final String? profilePhotoUrl;
   final String? coverPhotoUrl;
   final bool isAcceptingBookings;
+  final bool registrationEligible; // fee paid or exempt (own profile only)
+  final bool acceptingLockedByAdmin; // an admin switched bookings off (own profile only)
   final String? publicSlug;
   final int profileViewCount;
   final int travelTimeBeforeMinutes;
@@ -65,10 +71,14 @@ class ArtistProfile {
     this.dateOfBirth,
     this.instagramUrl,
     this.profileType,
+    this.profileTypes = const [],
+    this.experienceRange,
     this.specialities = const [],
     this.profilePhotoUrl,
     this.coverPhotoUrl,
-    this.isAcceptingBookings = true,
+    this.isAcceptingBookings = false, // new artists start with bookings OFF
+    this.registrationEligible = true,
+    this.acceptingLockedByAdmin = false,
     this.publicSlug,
     this.profileViewCount = 0,
     this.travelTimeBeforeMinutes = 0,
@@ -97,12 +107,16 @@ class ArtistProfile {
         dateOfBirth: json['dateOfBirth']?.toString(),
         instagramUrl: json['instagramUrl'],
         profileType: json['profileType'],
+        profileTypes: ((json['profileTypes'] as List?) ?? const []).map((e) => e.toString()).toList(),
+        experienceRange: (json['experienceRange'] ?? '').toString().isEmpty ? null : json['experienceRange'].toString(),
         specialities: ((json['specialities'] as List?) ?? const [])
             .map((e) => e is Map ? _i(e['subCategoryId']) : _i(e))
             .toList(),
         profilePhotoUrl: json['profilePhotoUrl'],
         coverPhotoUrl: json['coverPhotoUrl'],
-        isAcceptingBookings: json['isAcceptingBookings'] != false,
+        isAcceptingBookings: json['isAcceptingBookings'] == true,
+        registrationEligible: json['registrationEligible'] != false,
+        acceptingLockedByAdmin: json['acceptingLockedByAdmin'] == true,
         publicSlug: json['publicSlug'],
         profileViewCount: _i(json['profileViewCount']),
         travelTimeBeforeMinutes: _i(json['travelTimeBeforeMinutes']),

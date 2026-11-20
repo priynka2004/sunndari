@@ -180,11 +180,8 @@ class ArtistExtraDetails {
   /// Lets the user pick and save profile photo.
   static Future<String?> pickAndSaveProfilePhoto({required ImageSource source}) async {
     try {
-      final picked = await ImagePicker().pickImage(
-        source: source,
-        maxWidth: 1080,
-        imageQuality: 85,
-      );
+      // The original photo is kept — the server shrinks it when it is uploaded.
+      final picked = await ImagePicker().pickImage(source: source);
       if (picked == null) return null;
       final dir = await getApplicationDocumentsDirectory();
       final ext = picked.path.split('.').last;

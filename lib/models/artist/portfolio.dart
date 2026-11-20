@@ -13,6 +13,15 @@ class Portfolio {
   final bool isActive;
   final bool isWorkSample;
   final int sortOrder;
+  /// Videos are shrunk by the server in the background: pending → processing → ready, or failed.
+  /// Images and older items are always `ready`.
+  final String processingStatus;
+  /// Plain-language reason when [processingStatus] is `failed` (show it to the artist).
+  final String? processingError;
+  /// Still frame of a video (grid thumbnail).
+  final String? posterUrl;
+  /// Length of a video in seconds.
+  final int? durationSeconds;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -27,9 +36,19 @@ class Portfolio {
     required this.isActive,
     this.isWorkSample = false,
     this.sortOrder = 0,
+    this.processingStatus = 'ready',
+    this.processingError,
+    this.posterUrl,
+    this.durationSeconds,
     required this.createdAt,
     required this.updatedAt,
   });
+
+  /// True while the server is still working on a video (show a "processing" state).
+  bool get isProcessing => processingStatus == 'pending' || processingStatus == 'processing';
+
+  /// True when the server could not process a video (show [processingError]).
+  bool get processingFailed => processingStatus == 'failed';
 
   /// Builds this object from API JSON.
   factory Portfolio.fromJson(Map<String, dynamic> json) => Portfolio(
@@ -43,6 +62,10 @@ class Portfolio {
     isActive: json['isActive'] != false,
     isWorkSample: json['isWorkSample'] == true,
     sortOrder: (json['sortOrder'] as num?)?.toInt() ?? 0,
+    processingStatus: (json['processingStatus'] ?? 'ready').toString(),
+    processingError: (json['processingError'] ?? '').toString().isEmpty ? null : json['processingError'].toString(),
+    posterUrl: (json['posterUrl'] ?? '').toString().isEmpty ? null : json['posterUrl'].toString(),
+    durationSeconds: (json['durationSeconds'] as num?)?.toInt(),
     createdAt: DateTime.parse(json['createdAt']),
     updatedAt: DateTime.parse(json['updatedAt']),
   );

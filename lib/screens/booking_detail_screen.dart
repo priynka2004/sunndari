@@ -4,9 +4,9 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:android_intent_plus/android_intent.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../theme/tokens.dart';
 import '../widgets/common.dart';
@@ -19,6 +19,8 @@ import '../models/user/customer_address.dart';
 import '../helper/booking_stats.dart';
 import '../utils/service_locator.dart';
 import '../widgets/journey_action_button.dart';
+import '../widgets/advance_payment_widgets.dart';
+import '../utils/payment_status.dart';
 import 'chat_screen.dart';
 import 'change_booking_screen.dart';
 import 'reschedule_request_screen.dart';
@@ -28,6 +30,7 @@ import 'booking_help_screen.dart';
 import '../models/booking/booking_journey.dart';
 import '../utils/artist_page_data.dart';
 import '../utils/app_feedback.dart';
+import '../utils/accepting_bookings.dart';
 import '../api/booking_journey_service.dart' show JourneyReasonError;
 import '../utils/address_geocoder.dart' as geocoder;
 
@@ -66,10 +69,14 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
   BookingReschedule? _reschedule;
 
   LocationType? _locationType;
-  CustomerAddress? _address;
+  /// Comes with the booking itself (artists cannot call /users/address/get/).
+  /// Remembered, because some journey endpoints return a booking without the address.
+  CustomerAddress? _lastAddress;
+  CustomerAddress? get _address => _booking?.address ?? _lastAddress;
   List<StatusItem> _paymentStatuses = const [];
   bool _completionRequested = false;
   bool _pinBusy = false;
+  bool _startRequested = false; // In-Salon: artist already tapped "Start Service"
 
   // OTP Input के लिए Variables
   final TextEditingController _otpController = TextEditingController();
@@ -123,7 +130,10 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     try {
       final fresh = await ServiceLocator.bookingService.getBooking(widget.bookingId);
       if (!mounted) return;
-      setState(() => _booking = fresh);
+      setState(() {
+        _booking = fresh;
+        _lastAddress = fresh.address ?? _lastAddress;
+      });
     } catch (_) {
     }
   }
@@ -166,16 +176,6 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
       } catch (_) {
       }
 
-      CustomerAddress? address;
-      final addressId = booking.addressId;
-      if (addressId != null) {
-        try {
-          address = await ServiceLocator.userService.getAddress(addressId);
-        } catch (e) {
-          if (kDebugMode) debugPrint('[booking] getAddress($addressId) failed: $e');
-        }
-      }
-
       List<StatusItem> paymentStatuses = const [];
       if (booking.paymentStatusId != null) {
         try {
@@ -185,13 +185,15 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
       }
 
       final completionRequested = await ServiceLocator.bookingJourneyService.isCompletionRequested(booking.bookingId);
+      final startRequested = await ServiceLocator.bookingJourneyService.isStartRequested(booking.bookingId);
       if (!mounted) return;
       setState(() {
+        _startRequested = startRequested;
         _completionRequested = completionRequested;
         _booking = booking;
+        _lastAddress = booking.address ?? _lastAddress;
         _package = pkg;
         _locationType = locationType;
-        _address = address;
         _paymentStatuses = paymentStatuses;
         _loading = false;
       });
@@ -253,6 +255,14 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
         _load();
       }
     } catch (e) {
+      if (!mounted) return;
+      if (next == SlotStatus.confirmed) {
+        final turnedOn = await offerTurnOnBookings(context, e);
+        if (turnedOn != null) {
+          if (turnedOn) widget.onRefresh?.call();
+          return;
+        }
+      }
       if (mounted) AppFeedback.showError(context, e);
     }
   }
@@ -298,6 +308,9 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     if (_effectiveStatus == SlotStatus.confirmed && _slotForCallback.isFutureDate) {
       return 'Upcoming';
     }
+    // The server's own words for the status ("Completed and Payment Received" only when paid, …).
+    final serverLabel = _booking?.statusLabel;
+    if (serverLabel != null && serverLabel.isNotEmpty) return serverLabel;
     return switch (_effectiveStatus) {
       SlotStatus.pending => 'New Request',
       SlotStatus.confirmed => 'Confirmed',
@@ -321,6 +334,11 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
 
   /// Payment status label.
   String? get _paymentStatusLabel {
+    // The server now says it directly: paid, refunded or unpaid.
+    final direct = _booking?.paymentStatus;
+    if (direct != null && direct.trim().isNotEmpty) {
+      return PaymentStatusX.label(direct) ?? direct.trim();
+    }
     final id = _booking?.paymentStatusId;
     if (id == null) return null;
     final match = _paymentStatuses.where((s) => s.statusId == id);
@@ -345,6 +363,7 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
           date: _booking?.bookingDate ?? '',
           time: _timeLabel,
           rawStartTime: _booking?.startTime,
+          rawEndTime: _booking?.endTime,
           client: _clientName,
           service: _packageLabel,
           status: _effectiveStatus,
@@ -362,6 +381,7 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
       service: base.service,
       status: base.status,
       amount: base.amount,
+      statusLabel: base.statusLabel,
     );
   }
 
@@ -662,6 +682,36 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     ),
   );
 
+  /// Service price alone = booking total − add-ons − travel fee (never below zero).
+  double _serviceOnly(Booking? b) {
+    if (b == null) return widget.slot?.amount ?? 0;
+    final addons = b.addons.fold<double>(0, (sum, a) => sum + a.price);
+    final v = b.totalAmount - addons - b.travelFee;
+    return v < 0 ? b.totalAmount : v;
+  }
+
+  /// Shows the client's location on the map (a pin, no navigation) — used before the artist accepts a request.
+  /// Uses the exact saved latitude / longitude when the client picked the address on Google Maps.
+  Future<void> _viewOnMap() async {
+    final addr = _address;
+    if (addr == null) return;
+    final point = await geocoder.AddressGeocoder.forAddress(addr);
+    if (!mounted) return;
+    final label = addr.fullText;
+    try {
+      if (Platform.isAndroid) {
+        final data = point != null
+            ? 'geo:${point.lat},${point.lng}?q=${point.lat},${point.lng}(${Uri.encodeComponent(_clientName)})'
+            : 'geo:0,0?q=${Uri.encodeComponent(label)}';
+        await AndroidIntent(action: 'action_view', data: data).launch();
+      } else {
+        AppFeedback.showInfo(context, label);
+      }
+    } catch (_) {
+      if (mounted) AppFeedback.showInfo(context, label);
+    }
+  }
+
   /// Gets directions — opens Google Maps with the exact customer location.
   Future<void> _getDirections() async {
     final addr = _address;
@@ -718,11 +768,20 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
   JourneyStage? get _stage {
     final b = _booking;
     if (b == null) return null;
-    return JourneyStage.fromBooking(b, _effectiveStatus);
+    return JourneyStage.fromBooking(b, _effectiveStatus, startPinRequested: _startRequested);
   }
 
+  bool get _isInSalon => _booking?.isInSalon ?? false;
+
   /// Stage index.
-  int get _stageIndex => switch (_stage) {
+  int get _stageIndex => _isInSalon
+      ? switch (_stage) {
+    JourneyStage.arrived => 1,
+    JourneyStage.inProgress => 2,
+    JourneyStage.completed => 3,
+    _ => 0,
+  }
+      : switch (_stage) {
     JourneyStage.onTheWay => 1,
     JourneyStage.arrived => 2,
     JourneyStage.inProgress => 3,
@@ -732,12 +791,22 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
 
   /// UI piece: progress.
   Widget _progress() {
-    const steps = [
+    final doneLabel = (_stage == JourneyStage.completed && (_booking?.statusLabel ?? '').isNotEmpty)
+        ? _booking!.statusLabel!
+        : 'Completed and Payment Received';
+    // In-Salon has no On The Way / Arrived steps.
+    final steps = _isInSalon
+        ? [
+      ('Confirmed', 'Booking Accepted. You’re All Set!'),
+      ('Start Service', 'Tap Start Service When The Customer Is There, Then Enter Their Code.'),
+      (doneLabel, 'Take A Photo And Mark When The Service Is Completed.'),
+    ]
+        : [
       ('Confirmed', 'Booking Accepted. You’re All Set!'),
       ('On The Way', 'Tap The Button Below When You Are On The Way.'),
       ('Arrived', 'Mark When You Reach The Client’s Venue.'),
       ('Start Service', 'Enter The Service Code To Begin.'),
-      ('Completed', 'Mark When The Service Is Completed.'),
+      (doneLabel, 'Mark When The Service Is Completed.'),
     ];
     final cur = _stage == JourneyStage.completed ? steps.length : _stageIndex;
     return Column(
@@ -804,11 +873,71 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
   /// Tapping again re-sends it (once a minute at most).
   /// API: PUT /artists/bookings/completion_pin/request/
   Future<void> _requestCompletion() async {
+    // Advance (20%) booking: ask "Did you receive ₹… ?" (Yes / No) before the photo and the code.
+    final summary = _booking?.paymentSummary;
+    if (summary != null && summary.needsAnswer) {
+      final received = await askBalanceReceived(context, summary);
+      if (received == null || !mounted) return;
+      setState(() => _pinBusy = true);
+      try {
+        final updated = await ServiceLocator.bookingJourneyService.confirmBalance(widget.bookingId, received: received);
+        if (!mounted) return;
+        setState(() => _booking = updated);
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _pinBusy = false);
+        AppFeedback.showError(context, e is JourneyReasonError ? AppFeedback.friendlyMessage(e.reason) : e);
+        return;
+      }
+    }
     setState(() => _pinBusy = true);
     try {
+      // The photo of the finished service (camera only) must be uploaded before the completion code.
+      if (_booking?.completionProof == null) {
+        final shot = await ImagePicker().pickImage(source: ImageSource.camera);
+        if (shot == null) return;
+        final updated = await ServiceLocator.bookingJourneyService.uploadCompletionProof(widget.bookingId, shot);
+        if (!mounted) return;
+        setState(() => _booking = updated);
+        if (updated.completionProof == null) return;
+      }
       await ServiceLocator.bookingJourneyService.requestCompletionPin(widget.bookingId);
       if (!mounted) return;
       setState(() => _completionRequested = true);
+      AppFeedback.showSuccess(context, 'Code Sent To The Customer — Ask Them To Read It Out');
+    } catch (e) {
+      if (!mounted) return;
+      AppFeedback.showError(context, e is JourneyReasonError ? AppFeedback.friendlyMessage(e.reason) : e);
+    } finally {
+      if (mounted) setState(() => _pinBusy = false);
+    }
+  }
+
+  /// Advance booking, artist said No earlier and got paid afterwards → answer Yes now (allowed even after completion).
+  /// API: PUT /artists/bookings/balance/confirm/
+  Future<void> _confirmBalanceReceivedLater() async {
+    setState(() => _pinBusy = true);
+    try {
+      final updated = await ServiceLocator.bookingJourneyService.confirmBalance(widget.bookingId, received: true);
+      if (!mounted) return;
+      setState(() => _booking = updated);
+      AppFeedback.showSuccess(context, 'Payment Marked As Received');
+    } catch (e) {
+      if (!mounted) return;
+      AppFeedback.showError(context, e is JourneyReasonError ? AppFeedback.friendlyMessage(e.reason) : e);
+    } finally {
+      if (mounted) setState(() => _pinBusy = false);
+    }
+  }
+
+  /// In-Salon: the artist taps "Start Service" → the customer gets the 4-digit start code.
+  /// API: PUT /artists/bookings/start_pin/request/
+  Future<void> _requestStart() async {
+    setState(() => _pinBusy = true);
+    try {
+      await ServiceLocator.bookingJourneyService.requestStartPin(widget.bookingId);
+      if (!mounted) return;
+      setState(() => _startRequested = true);
       AppFeedback.showSuccess(context, 'Code Sent To The Customer — Ask Them To Read It Out');
     } catch (e) {
       if (!mounted) return;
@@ -837,6 +966,8 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
       if (stageNow == JourneyStage.inProgress) {
         await ServiceLocator.bookingJourneyService.clearCompletionRequested(widget.bookingId);
         _completionRequested = false;
+      } else {
+        _startRequested = false;
       }
       setState(() => _booking = b);
       widget.onRefresh?.call();
@@ -844,7 +975,11 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     } catch (e) {
       if (!mounted) return;
       if (e is JourneyReasonError) {
-        if (e.reason.toLowerCase().contains('request the completion pin')) {
+        if (e.reason.toLowerCase().contains('request the start service pin')) {
+          await ServiceLocator.bookingJourneyService.clearStartRequested(widget.bookingId);
+          if (mounted) setState(() => _startRequested = false);
+          if (mounted) AppFeedback.showWarning(context, 'Tap "Start Service" First — The Customer Needs The Code.');
+        } else if (e.reason.toLowerCase().contains('request the completion pin')) {
           // Server says the code was never requested → show the "Complete Service" button again.
           await ServiceLocator.bookingJourneyService.clearCompletionRequested(widget.bookingId);
           if (mounted) setState(() => _completionRequested = false);
@@ -882,6 +1017,8 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
         : 'When You Have Finished, Tap "Complete Service". The Client Then Gets A 4-digit Code To Read Out.')
         : stage == JourneyStage.arrived
         ? 'Ask Your Client To Read Out The 4-digit Start Code Shown In Their App.'
+        : _isInSalon && stage == JourneyStage.upcoming
+        ? 'When The Customer Is At Your Studio, Tap "Start Service". The Client Then Gets A 4-digit Start Code To Read Out.'
         : stage == JourneyStage.onTheWay
         ? 'Tap "I Have Arrived" When You Reach The Venue. The Client Then Gets A 4-digit Start Code To Read Out.'
         : '${_onMyWayUnlockLabel != null && !_isMissed ? 'You Can Tap "On My Way" From $_onMyWayUnlockLabel (2 Hours Before). ' : ''}'
@@ -908,6 +1045,19 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     // the short explanation (and when "On My Way" unlocks) — no locked boxes
     // and no disabled "Verify & Start Service" button.
     if (!(stage == JourneyStage.arrived || inProgress)) {
+      if (_isInSalon && stage == JourneyStage.upcoming && (_slotForCallback.isWithinUpcomingWindow)) {
+        return AiraCard(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              header(),
+              const SizedBox(height: 16),
+              PrimaryButton(label: 'Start Service', expand: true, onTap: _pinBusy ? null : _requestStart),
+            ],
+          ),
+        );
+      }
       return AiraCard(
         padding: const EdgeInsets.all(14),
         child: header(),
@@ -1020,7 +1170,7 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
             Center(
               child: Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text('Available After You Arrive', style: AiraText.sans(fontSize: 11, color: AiraColors.charcoalSoft)),
+                child: Text(_isInSalon ? 'Available After You Tap Start Service' : 'Available After You Arrive', style: AiraText.sans(fontSize: 11, color: AiraColors.charcoalSoft)),
               ),
             ),
           if (inProgress && _completionRequested)
@@ -1096,10 +1246,24 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
           _rowItem(Icons.person_outline_rounded, 'Client', _clientName),
           _rowItem(Icons.event_outlined, 'Date & Time', '$_dateText • $_timeLabel'),
           _rowItem(Icons.location_on_outlined, 'Venue', _locationType?.name ?? '—',
-              sub: 'Exact Address Shared After Confirmation', last: (b?.notes ?? '').trim().isEmpty),
+              // When the client's address is on the booking, show it (with the map button below) so the artist
+              // can judge the location BEFORE accepting. Otherwise keep the old note.
+              sub: _address != null ? _address!.fullText : 'Exact Address Shared After Confirmation',
+              last: (b?.notes ?? '').trim().isEmpty),
           if ((b?.notes ?? '').trim().isNotEmpty)
             _rowItem(Icons.edit_note_rounded, 'Special Request / Additional Information', b!.notes!.trim(), last: true),
         ]),
+        if (_address != null) ...[
+          const SizedBox(height: 10),
+          GhostButton(
+            label: 'View Location On Map',
+            icon: Icons.map_outlined,
+            small: true,
+            compact: true,
+            expand: true,
+            onTap: _viewOnMap,
+          ),
+        ],
         const SizedBox(height: 12),
         _card([
           Padding(padding: const EdgeInsets.only(top: 6, bottom: 2), child: Text('Service Details', style: AiraText.serif(fontSize: 18, fontWeight: FontWeight.w700))),
@@ -1118,7 +1282,9 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
         const SizedBox(height: 12),
         _card([
           Padding(padding: const EdgeInsets.only(top: 6, bottom: 2), child: Text('Payment Details', style: AiraText.serif(fontSize: 18, fontWeight: FontWeight.w700))),
-          _rowItem(Icons.currency_rupee_rounded, 'Service Total', '₹${total.toStringAsFixed(0)}'),
+          // The total already includes the travel fee (and add-ons) — say so, so nobody thinks it is missing.
+          _rowItem(Icons.currency_rupee_rounded, 'Booking Total', '₹${total.toStringAsFixed(0)}',
+              sub: (b?.travelFee ?? 0) > 0 ? 'Includes ₹${b!.travelFee.toStringAsFixed(0)} Travel Fee' : null),
           _rowItem(Icons.toll_outlined, 'Platform Deductions',
               _commission > 0 ? '−₹${fee.toStringAsFixed(0)}' : 'Shown Before Acceptance',
               sub: _commission > 0 ? '${_commission.toStringAsFixed(_commission % 1 == 0 ? 0 : 1)}% Platform Fee' : null),
@@ -1228,21 +1394,31 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
                   if (_effectiveStatus != SlotStatus.completed &&
                       _effectiveStatus != SlotStatus.cancelled &&
                       _effectiveStatus != SlotStatus.noShow) ...[
+                    // Left button a little smaller so "Get Directions" on the right has room to show fully.
                     Expanded(
+                      flex: 9,
                       child: GhostButton(
                         label: 'Contact Client',
                         icon: Icons.chat_bubble_outline,
                         small: true,
+                        compact: true,
                         expand: true,
                         onTap: () => Navigator.of(context).push(MaterialPageRoute(
                           builder: (_) => ChatScreen(bookingId: widget.bookingId, title: _clientName),
                         )),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                   ],
                   Expanded(
-                    child: PrimaryButton(label: 'Get Directions', icon: Icons.near_me_outlined, small: true, expand: true, onTap: _getDirections),
+                    flex: 11,
+                    child: PrimaryButton(
+                        label: 'Get Directions',
+                        icon: Icons.near_me_outlined,
+                        small: true,
+                        compact: true,
+                        expand: true,
+                        onTap: _getDirections),
                   ),
                 ],
               ),
@@ -1330,15 +1506,26 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
             },
           ),
         ],
+        if (b?.paymentSummary?.isAdvance == true && _effectiveStatus != SlotStatus.cancelled) ...[
+          const SizedBox(height: 12),
+          PaymentSummaryCard(
+            summary: b!.paymentSummary!,
+            busy: _pinBusy,
+            onReceivedLater: _effectiveStatus == SlotStatus.completed ? _confirmBalanceReceivedLater : null,
+          ),
+        ],
         if (finished) ...[
           const SizedBox(height: 12),
           _card([
-            _rowItem(Icons.currency_rupee_rounded, 'Service Total', '₹${(b?.totalAmount ?? widget.slot?.amount ?? 0).toStringAsFixed(0)}',
-                last: false),
+            // Service + add-ons + travel = booking total (the server's total already includes all three).
+            _rowItem(Icons.currency_rupee_rounded, 'Service',
+                '₹${_serviceOnly(b).toStringAsFixed(0)}', last: false),
             for (final a in b?.addons ?? const <BookingAddOn>[])
               _rowItem(Icons.add_circle_outline_rounded, 'Add-on · ${a.name}', '₹${a.price.toStringAsFixed(0)}', last: false),
             if ((b?.travelFee ?? 0) > 0)
               _rowItem(Icons.directions_car_outlined, 'Travel Fee', '₹${b!.travelFee.toStringAsFixed(0)}', last: false),
+            if (b != null)
+              _rowItem(Icons.receipt_long_outlined, 'Booking Total', '₹${b.totalAmount.toStringAsFixed(0)}', last: false),
             if (b?.platformFee != null)
               _rowItem(Icons.percent_rounded, 'Platform Fee', '− ₹${b!.platformFee!.toStringAsFixed(0)}', last: false),
             if (b?.netAmount != null)

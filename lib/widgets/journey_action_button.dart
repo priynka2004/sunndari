@@ -86,24 +86,27 @@ class _JourneyActionButtonState extends State<JourneyActionButton> {
     });
   }
 
-  ({String label, bool enabled}) _labelFor(JourneyStage stage) {
+  ({String label, bool enabled}) _labelFor(JourneyStage stage, Booking booking) {
     final slot = widget.slot;
     switch (stage) {
       case JourneyStage.upcoming:
         if (slot.isWithinUpcomingWindow) {
-          return (label: 'Mark On The Way', enabled: true);
+          // In-Salon: no On My Way / Arrived — the artist starts the service when the customer is there.
+          return (label: 'Start Service', enabled: true);
         }
         return (label: 'Upcoming', enabled: false);
       case JourneyStage.missed:
         return (label: 'Missed', enabled: false);
       case JourneyStage.onTheWay:
-        return (label: 'I Have Arrived', enabled: true);
+        return (label: 'Start Service', enabled: true);
       case JourneyStage.arrived:
         return (label: 'Start Service', enabled: true);
       case JourneyStage.inProgress:
         return (label: 'Complete Service', enabled: true);
       case JourneyStage.completed:
-        return (label: 'Completed', enabled: false);
+      // The server's own words: "Completed and Payment Received" only when paid, else just "Completed".
+        final serverLabel = booking.statusLabel;
+        return (label: (serverLabel != null && serverLabel.isNotEmpty) ? serverLabel : 'Completed and Payment Received', enabled: false);
     }
   }
 
@@ -116,7 +119,7 @@ class _JourneyActionButtonState extends State<JourneyActionButton> {
     if (booking.cancelledBy != null && booking.cancelledBy!.isNotEmpty) {
       return GhostButton(label: 'Cancelled', small: widget.small, color: AiraColors.charcoalSoft, onTap: null);
     }
-    final info = _labelFor(stage);
+    final info = _labelFor(stage, booking);
     if (!info.enabled) {
       return GhostButton(label: info.label, small: widget.small, color: AiraColors.charcoalSoft, onTap: null);
     }
