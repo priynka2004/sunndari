@@ -22,6 +22,7 @@ import '../onboarding/artist_page_setup_screen.dart';
 import '../help_center_screen.dart';
 import '../edit_profile_screen.dart';
 import 'login_screen.dart';
+import 'delete_account_helper.dart';
 
 /// SCREEN: Registration Status — shows pending / approved / rejected / suspended review state after onboarding.
 class RegistrationStatusScreen extends StatefulWidget {
@@ -199,12 +200,25 @@ class _RegistrationStatusScreenState extends State<RegistrationStatusScreen> {
 
   /// UI: logs out link.
   Widget _logoutLink() => Center(
-        child: TextButton(
-          onPressed: _logout,
-          child: Text(
-            'Log Out',
-            style: AiraText.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AiraColors.errorText),
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextButton(
+              onPressed: _logout,
+              child: Text(
+                'Log Out',
+                style: AiraText.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AiraColors.errorText),
+              ),
+            ),
+            // Account deletion must be reachable for every account — also while it is still pending approval.
+            TextButton(
+              onPressed: () => confirmAndDeleteAccount(context),
+              child: Text(
+                'Delete Account',
+                style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w600, color: AiraColors.charcoalSoft),
+              ),
+            ),
+          ],
         ),
       );
 

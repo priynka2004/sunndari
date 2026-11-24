@@ -130,6 +130,9 @@ class ApiEndpoints {
 
   static const String usersProfileGet = '/users/profile/get/';
   static const String usersProfileUpdate = '/users/profile/update/';
+  // Artist deletes own account: the account is switched OFF (nothing is erased) and can come back with the same phone number.
+  // DELETE /artists/account/delete/?user_id=<own id>  (200 ok · 400 message e.g. open booking · 401 afterwards)
+  static const String artistsAccountDelete = '/artists/account/delete/';
 
   static const String usersAddressCreate = '/users/address/create/';
   static const String usersAddressGet = '/users/address/get/';

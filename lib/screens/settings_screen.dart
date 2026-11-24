@@ -23,6 +23,7 @@ import 'edit_travel_charges_screen.dart';
 import 'edit_working_hours_screen.dart';
 import 'public_profile_preview_screen.dart';
 import 'auth/forgot_password_screen.dart';
+import 'auth/delete_account_helper.dart';
 import '../utils/share_profile.dart';
 import 'onboarding/artist_page_setup_screen.dart';
 import 'onboarding/registration_fee_screen.dart';
@@ -397,6 +398,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HelpCenterScreen()));
       } else if (row == 'Log Out' || row == 'Log Out') {
         onLogout();
+      } else if (row == 'Delete Account') {
+        // Confirm (type DELETE) -> DELETE /artists/account/delete/?user_id=<own id> -> logout cleanup -> Login screen
+        confirmAndDeleteAccount(context);
       } else {
         AppFeedback.showInfo(context, "This Isn't Available Yet — Check Back Soon");
       }
@@ -423,11 +427,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       child: Row(
                         children: [
-                          Icon(rows[i].$1, size: 22, color: AiraColors.roseDeep),
+                          Icon(rows[i].$1, size: 22,
+                              color: rows[i].$2 == 'Delete Account' ? const Color(0xFFD64545) : AiraColors.roseDeep),
                           const SizedBox(width: 14),
                           Expanded(
                             child: Text(rows[i].$2,
-                                style: AiraText.sans(fontSize: 14, fontWeight: FontWeight.w600, color: AiraColors.roseDeep)),
+                                style: AiraText.sans(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: rows[i].$2 == 'Delete Account'
+                                        ? const Color(0xFFD64545)
+                                        : AiraColors.roseDeep)),
                           ),
                           const Icon(Icons.chevron_right_rounded, size: 20, color: AiraColors.rose),
                         ],
@@ -568,6 +578,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             (Icons.person_outline_rounded, 'Edit Profile'),
             (Icons.shield_outlined, 'Password & Security'),
             (Icons.help_outline_rounded, 'Help & Support'),
+            (Icons.delete_forever_outlined, 'Delete Account'),
           ]),
           Center(
             child: TextButton.icon(

@@ -19,6 +19,7 @@ import '../../utils/razorpay_checkout_service.dart';
 import '../../utils/service_locator.dart';
 import '../../widgets/common.dart';
 import '../auth/logout_helper.dart';
+import '../auth/delete_account_helper.dart';
 import '../auth/post_login_router.dart';
 
 /// WHEN the fee is demanded.
@@ -412,6 +413,12 @@ class _RegistrationFeeScreenState extends State<RegistrationFeeScreen> {
                       onPressed: _busy ? null : () => confirmAndLogout(context),
                       child: Text('Log Out',
                           style: AiraText.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AiraColors.errorText)),
+                    ),
+                  if (!widget.canClose)
+                    TextButton(
+                      onPressed: _busy ? null : () => confirmAndDeleteAccount(context),
+                      child: Text('Delete Account',
+                          style: AiraText.sans(fontSize: 12.5, fontWeight: FontWeight.w600, color: AiraColors.charcoalSoft)),
                     ),
                 ],
               ),

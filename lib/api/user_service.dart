@@ -6,6 +6,7 @@ import 'api_endpoints.dart';
 import 'api_service.dart';
 import '../utils/paginated_response.dart';
 import '../utils/api_response.dart';
+import '../utils/app_session.dart';
 import '../models/user/user_profile.dart';
 import '../models/user/user_profile_update.dart';
 import '../models/user/customer_address.dart';
@@ -98,6 +99,21 @@ class UserService {
     await _apiService.delete(
       ApiEndpoints.usersAddressDelete,
       queryParameters: {'address_id': addressId.toString()},
+    );
+  }
+
+  /// Artist deletes their own account (switched off, not erased; can return later with the same phone number).
+  /// API: DELETE /artists/account/delete/?user_id=<own user_id>
+  /// 200 → the caller must sign out locally. 400 → the backend message (e.g. a paid / confirmed / in-progress
+  /// booking is still open) is thrown as an Exception and nothing changes. Any later call with the old token → 401.
+  Future<void> deleteAccount() async {
+    final userId = AppSession.instance.userId;
+    if (userId == null || userId == 0) {
+      throw Exception('Please Sign In Again And Try Once More.');
+    }
+    await _apiService.delete(
+      ApiEndpoints.artistsAccountDelete,
+      queryParameters: {'user_id': userId.toString()},
     );
   }
 }
